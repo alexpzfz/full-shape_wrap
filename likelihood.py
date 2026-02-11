@@ -9,6 +9,7 @@ class Likelihood:
         self.nmocks_cov = observable.nmocks_cov
         self.emu = emu
         self.params = params
+        self.params.z = observable.cosmo_fid['z']  # Set redshift in params for use in derived parameters if needed
         self.de_model = self.params.de_model
         self.x = observable.x
         self.y = observable.get_flatten()

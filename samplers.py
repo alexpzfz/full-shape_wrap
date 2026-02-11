@@ -42,7 +42,7 @@ class NautilusSampler(BaseSampler):
         # Nautilus passes a dictionary of arguments if the prior was built with names
         def likelihood_wrapper(param_dict):
             full_dict = self.params.get_full_dict(param_dict)
-            emu_dict = self.params.get_comet_dict(full_dict, z=self.likelihood.observable.cosmo_fid['z'])
+            emu_dict = self.params.get_comet_dict(full_dict)
 
             loglike = self.likelihood.get_loglike(emu_dict) 
             if self.require_blobs:
@@ -100,7 +100,7 @@ class MinuitMinimizer(BaseSampler):
             chi2_prior = -2.0 * lp
             # Get Data Chi2
             # Note: We use get_chi2 directly, not get_loglike
-            emu_dict = self.params.get_comet_dict(full_dict, z=self.likelihood.observable.cosmo_fid['z'])
+            emu_dict = self.params.get_comet_dict(full_dict)
             chi2_data = self.likelihood.get_chi2(emu_dict)
             return chi2_data + chi2_prior
 

@@ -39,11 +39,11 @@ _bias_params = {"EggScoSmi": [
     Parameter(name="bG2", value=0.0, prior=(-5.0, 5.0), prior_type="uniform", fixed=True, latex=r"b_{G2}"),
     Parameter(name="bGam3", value=0.0, prior=(-5.0, 5.0), prior_type="uniform", fixed=True, latex=r"b_{\Gamma_{3}}"),],
 
-    "DESI_DR2": [
-    Parameter(name="b1t", value=1.0, prior=(0.1, 8.0), prior_type="uniform", fixed=False, latex=r"\tilde{b}_1"),
-    Parameter(name="b2t", value=0.0, prior=(0, 20), prior_type="gaussian", fixed=False, latex=r"\tilde{b}_2"),
-    Parameter(name="bK2t", value=0.0, prior=(0, 20), prior_type="gaussian", fixed=False, latex=r"\tilde{b}_{K^2}"),
-    Parameter(name="btdt", value=0.0, prior=(0, 80), prior_type="gaussian", fixed=False, latex=r"\tilde{b}_{\rm td}"),
+    "DesJeoSch": [
+    Parameter(name="b1", value=1.0, prior=(0.1, 8.0), prior_type="uniform", fixed=False, latex=r"b_1"),
+    Parameter(name="b2", value=0.0, prior=(0, 20), prior_type="gaussian", fixed=False, latex=r"b_2"),
+    Parameter(name="bK2", value=0.0, prior=(0, 20), prior_type="gaussian", fixed=False, latex=r"b_{K^2}"),
+    Parameter(name="btd", value=0.0, prior=(0, 80), prior_type="gaussian", fixed=False, latex=r"b_{\rm td}"),
 ]}
 
 _damping_params = [Parameter(name="avir", value=5.0, prior=(0.0, 10.0), prior_type="uniform", fixed=True, latex=r"a_{\rm vir}")]
@@ -91,7 +91,8 @@ class Params:
                     raise ValueError(f"Co-evolution for {name} not implemented.")
         self.sigmaR_ref = None  # Only relevant for DESI_DR2 bias basis
         self.derived_order = []
-
+        self.z = None # Placeholder for redshift, can be set externally if needed for derived parameters
+        
 
     def set_reference_sigmaR(self, sigmaR):
         assert 'DESI_DR2' in self.emu.bias_basis, "Reference sigmaR is only relevant for DESI_DR2 bias basis."
@@ -104,7 +105,7 @@ class Params:
         new_param = Parameter(name=name, value=value, prior=prior, prior_type=prior_type, fixed=False, derived=False, latex=latex)
         self.parameters[name] = new_param
 
-    def set_derived_param(self, name, deriv_func, latex=None, exported=False):
+    def set_derived_param(self, name, deriv_func, latex="", exported=False):
         if name not in self.parameters:
             self.parameters[name] = Parameter(name=name, value=None, prior=None, prior_type=None, fixed=True, derived=True, derived_func=deriv_func, latex=latex, exported=exported)
         
@@ -112,7 +113,7 @@ class Params:
         self.parameters[name].fixed = False
         self.parameters[name].derived_func = deriv_func
         self.parameters[name].exported = exported
-        if latex is not None:
+        if latex != "":
             self.parameters[name].latex = latex
 
         if name not in self.derived_order:
@@ -220,6 +221,7 @@ class Params:
             for name, val in zip(names, free_values_dict_or_list):
                 full_dict[name] = val
 
+        plin_evaluated = False
         # Compute derived parameters on the fly based on current free and fixed values
         for name in self.derived_order:
             param = self.parameters[name]
@@ -227,7 +229,11 @@ class Params:
                 if callable(param.derived_func):
                     full_dict[name] = param.derived_func(full_dict)
                 elif isinstance(param.derived_func, str):
-                    full_dict[name] = self.emu.params[param.derived_func]
+                    if not plin_evaluated:
+                        cosmo_dict = self.cosmo_dict(full_dict)
+                        self.emu.PL(0.1, cosmo_dict, de_model=self.de_model)  # Ensure PLin is evaluated for current cosmology
+                        plin_evaluated = True
+                    full_dict[name] = float(self.emu.params[param.derived_func]) # This will only work when 1 dataset is used, need to fix this in the future
                 else:
                     raise ValueError(f"Invalid derived_func for {name}. Must be callable or string key.")
 
@@ -243,11 +249,16 @@ class Params:
             full_dict['a4'] = full_dict['a4'] * self.sigmaR_ref**2
         return full_dict
     
-    def get_comet_dict(self, full_dict, z):
+    def get_comet_dict(self, full_dict):
         """Extracts the parameters needed for the comet emulator from the full dict, including derived parameters"""
         comet_dict = {key: full_dict[key] for key in self.comet_keys if key in full_dict}
-        comet_dict['z'] = z
+        comet_dict['z'] = self.z
         return comet_dict
+    
+    def cosmo_dict(self, full_dict):
+        cosmo_dict = {key: full_dict[key] for key in self.cosmo_params if key in full_dict}
+        cosmo_dict['z'] = self.z
+        return cosmo_dict
 
 
 
@@ -261,6 +272,7 @@ class Params:
         if name in self.parameters:
             self.parameters[name].value = value
             self.parameters[name].fixed = True # This change is now immediately reflected in properties
+            self.parameters[name].derived = False # Ensure it's not treated as derived
         else:
             raise KeyError(f"Parameter {name} not found.")
             
@@ -268,6 +280,7 @@ class Params:
         """Helper to un-fix a parameter if needed"""
         if name in self.parameters:
             self.parameters[name].fixed = False
+            self.parameters[name].derived = False # Ensure it's not treated as derived
         else:
             raise KeyError(f"Parameter {name} not found.")
     
@@ -294,3 +307,58 @@ class Params:
         else:
             raise KeyError(f"Parameter {name} not found.")
 
+
+    def use_reparametrization(self, reparam_bias=False, reparam_counterterms=True,
+                              reparem_stochastic=False, mode='ap', sigma_ref=1.0):
+        if 'ap' in mode:
+            self.set_derived_param('q_par', 'q_lo', latex=r"q_{\parallel}", exported=False)
+            self.set_derived_param('q_perp', 'q_tr', latex=r"q_{\perp}", exported=False)
+            self.set_derived_param('q_iso3', lambda p: p['q_par'] * p['q_perp']**2, latex=r"q_{\rm iso}^3", exported=True)
+        
+        if 'sigma_12' in mode:
+            self.set_derived_param('sigma_12', 's12', latex=r"\sigma_{12}", exported=True)
+
+        if reparam_counterterms:
+            def reparam_counterterm_func(p, name):
+                factor = 1.0
+                if 'ap' in mode:
+                    factor *= p['q_iso3']
+                if 'sigma_12' in mode:
+                    factor *= sigma_ref**2 / p['sigma_12']**2
+                return p[name] * factor
+                
+
+            for name in self.counterterm_params.keys():
+                name_reparam = name + '_r'
+                latex_reparam = self.parameters[name].latex + "_r"
+                self.add_sampled_param(name_reparam, value=0.0, prior=(0, 500), prior_type="gaussian", latex=latex_reparam)
+                self.set_derived_param(name, lambda p, n=name_reparam: reparam_counterterm_func(p, n), latex=self.parameters[name].latex, exported=True)
+
+        if reparam_bias:
+            def reparam_bias_func(p, name):
+                factor_ap = 1.0
+                factor_sigmaR = 1.0
+                if 'ap' in mode:
+                    factor_ap = np.sqrt(p['q_iso3'])
+                if 'sigma_12' in mode:
+                    factor_sigmaR = sigma_ref / p['sigma_12']
+
+                if name == 'b1':
+                    return p[name] * factor_sigmaR * factor_ap
+                if name in ['b2', 'b2t', 'g2', 'bK2', 'bG2']:
+                    return p[name] * factor_sigmaR**2 * factor_ap
+                if name in ['g21', 'bGam3', 'btd']:
+                    return p[name] * factor_sigmaR**4 * factor_ap**2
+
+            for name in self.bias_params.keys():
+                name_reparam = name + '_r'
+                latex_reparam = self.parameters[name].latex + "_r"
+                if name == 'b1':
+                    prior_type = 'uniform'
+                    prior = (0.5, 4.0)
+                else:
+                    prior_type = 'gaussian'
+                    prior = (0, 20)
+
+                self.add_sampled_param(name_reparam, value=0.0, prior=prior, prior_type=prior_type, latex=latex_reparam)
+                self.set_derived_param(name, lambda p, n=name_reparam: reparam_bias_func(p, n), latex=self.parameters[name].latex, exported=True)
