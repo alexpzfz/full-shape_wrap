@@ -11,6 +11,7 @@ class Parameter:
     fixed: bool = False
     derived: bool = False  # True if this parameter is derived from others (e.g. co-evolution)
     derived_func: Optional[Union[Callable, str]] = None  # Function to compute derived parameter, or name from emu params dict
+    requires_emu_eval: bool = False # Whether this derived parameter requires an emulator evaluation (e.g. depends on PLin)
     exported: bool = False # Only relevant if derived=True, whether to include this parameter in the output samples
     latex: str = ""
 
@@ -105,13 +106,14 @@ class Params:
         new_param = Parameter(name=name, value=value, prior=prior, prior_type=prior_type, fixed=False, derived=False, latex=latex)
         self.parameters[name] = new_param
 
-    def set_derived_param(self, name, deriv_func, latex="", exported=False):
+    def set_derived_param(self, name, deriv_func, latex="", exported=False, requires_emu_eval=False):
         if name not in self.parameters:
-            self.parameters[name] = Parameter(name=name, value=None, prior=None, prior_type=None, fixed=True, derived=True, derived_func=deriv_func, latex=latex, exported=exported)
+            self.parameters[name] = Parameter(name=name, value=None, prior=None, prior_type=None, fixed=True, derived=True, derived_func=deriv_func, requires_emu_eval=requires_emu_eval, latex=latex, exported=exported)
         
         self.parameters[name].derived = True
         self.parameters[name].fixed = False
         self.parameters[name].derived_func = deriv_func
+        self.parameters[name].requires_emu_eval = requires_emu_eval
         self.parameters[name].exported = exported
         if latex != "":
             self.parameters[name].latex = latex
@@ -226,16 +228,18 @@ class Params:
         for name in self.derived_order:
             param = self.parameters[name]
             if param.derived_func is not None:
-                if callable(param.derived_func):
+                if not param.requires_emu_eval and callable(param.derived_func):
                     full_dict[name] = param.derived_func(full_dict)
-                elif isinstance(param.derived_func, str):
+
+                else:
                     if not plin_evaluated:
                         cosmo_dict = self.cosmo_dict(full_dict)
                         self.emu.PL(0.1, cosmo_dict, de_model=self.de_model)  # Ensure PLin is evaluated for current cosmology
                         plin_evaluated = True
-                    full_dict[name] = float(self.emu.params[param.derived_func]) # This will only work when 1 dataset is used, need to fix this in the future
-                else:
-                    raise ValueError(f"Invalid derived_func for {name}. Must be callable or string key.")
+                    if isinstance(param.derived_func, str):
+                        full_dict[name] = float(self.emu.params[param.derived_func]) # This will only work when 1 dataset is used, need to fix this in the future
+                    elif callable(param.derived_func):
+                        full_dict[name] = param.derived_func(full_dict)
 
 
         if self.emu.bias_basis == "DESI_DR2" and self.sigmaR_ref is not None:
@@ -308,15 +312,26 @@ class Params:
             raise KeyError(f"Parameter {name} not found.")
 
 
+    def get_AP_parameters(self, basis='par_perp'):
+        q_par = self.emu.H_fid / self.emu.cosmo.Hz(np.array([self.z]))
+        q_perp = self.emu.cosmo.comoving_transverse_distance(np.array([self.z])) / self.emu.Dm_fid
+        q_par = float(q_par) # Need to change this for multiz
+        q_perp = float(q_perp)
+        if basis == 'par_perp':
+            return q_par, q_perp
+        elif basis == 'iso_ap':
+            q_iso = (q_par * q_perp**2)**(1/3)
+            q_ap = q_par / q_perp
+            return q_iso, q_ap
+
+
     def use_reparametrization(self, reparam_bias=False, reparam_counterterms=True,
-                              reparem_stochastic=False, mode='ap', sigma_ref=1.0):
+                              reparam_stochastic=False, mode='ap', sigma_ref=1.0):
         if 'ap' in mode:
-            self.set_derived_param('q_par', 'q_lo', latex=r"q_{\parallel}", exported=False)
-            self.set_derived_param('q_perp', 'q_tr', latex=r"q_{\perp}", exported=False)
-            self.set_derived_param('q_iso3', lambda p: p['q_par'] * p['q_perp']**2, latex=r"q_{\rm iso}^3", exported=True)
+            self.set_derived_param('q_iso3', lambda p: self.get_AP_parameters(basis='iso_ap')[0]**3, requires_emu_eval=True, latex=r"q_{\rm iso}^3", exported=True)
         
         if 'sigma_12' in mode:
-            self.set_derived_param('sigma_12', 's12', latex=r"\sigma_{12}", exported=True)
+            self.set_derived_param('sigma_12', 's12', requires_emu_eval=True, latex=r"\sigma_{12}", exported=True)
 
         if reparam_counterterms:
             def reparam_counterterm_func(p, name):
@@ -330,7 +345,7 @@ class Params:
 
             for name in self.counterterm_params.keys():
                 name_reparam = name + '_r'
-                latex_reparam = self.parameters[name].latex + "_r"
+                latex_reparam = self.parameters[name].latex + "^r"
                 self.add_sampled_param(name_reparam, value=0.0, prior=(0, 500), prior_type="gaussian", latex=latex_reparam)
                 self.set_derived_param(name, lambda p, n=name_reparam: reparam_counterterm_func(p, n), latex=self.parameters[name].latex, exported=True)
 
@@ -352,7 +367,7 @@ class Params:
 
             for name in self.bias_params.keys():
                 name_reparam = name + '_r'
-                latex_reparam = self.parameters[name].latex + "_r"
+                latex_reparam = self.parameters[name].latex + "^r"
                 if name == 'b1':
                     prior_type = 'uniform'
                     prior = (0.5, 4.0)
