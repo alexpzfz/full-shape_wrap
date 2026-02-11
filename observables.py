@@ -11,7 +11,7 @@ class Observable:
             self.x = [self.x] * len(self.y)
         self.cosmo_fid = cosmo_fid
         self.h_fid = cosmo_fid['h'] if cosmo_fid is not None else None
-        self.cov = cov
+        self.cov = cov.copy() if cov is not None else None
         self.n_obs = len(self.y)
         self.nbar = nbar
         self.nmocks_cov = nmocks_cov
@@ -56,6 +56,12 @@ class PowerSpectrumMultipoles(Observable):
         self.k = self.x
         self.Pell = self.y
         self.ell = [2*i for i in range(self.n_obs)]
+
+        # for the moment, store unformated data to use for comet AM chi2 function
+        self._k = k * self.h_fid if not Mpc_units else k
+        self._Pell = np.array(Pell) / self.h_fid**3 if not Mpc_units else np.array(Pell)
+        self._cov = cov / self.h_fid**6 if cov is not None and not Mpc_units else cov
+        self._kmax = [km * self.h_fid for km in kmax] if kmax is not None and not Mpc_units else kmax
     
     def plot(self, ax=None, h_units=False,**kwargs):
         import matplotlib.pyplot as plt
