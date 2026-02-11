@@ -1,5 +1,6 @@
 import numpy as np
 import dataclasses
+from typing import Callable, Optional, Union
 
 @dataclasses.dataclass
 class Parameter:
@@ -8,6 +9,9 @@ class Parameter:
     prior: tuple = None  # (min, max)
     prior_type: str = "uniform"  # 'uniform' or 'gaussian'
     fixed: bool = False
+    derived: bool = False  # True if this parameter is derived from others (e.g. co-evolution)
+    derived_func: Optional[Union[Callable, str]] = None  # Function to compute derived parameter, or name from emu params dict
+    exported: bool = False # Only relevant if derived=True, whether to include this parameter in the output samples
     latex: str = ""
 
 
@@ -16,7 +20,7 @@ _cosmo_params = [
     Parameter(name="wb", value=0.022, prior=(0.0205, 0.02415), prior_type="uniform", fixed=False, latex=r"\omega_b"),
     Parameter(name="h", value=0.67, prior=(0.55, 0.85), prior_type="uniform", fixed=False, latex=r"h"),
     Parameter(name="ns", value=0.965, prior=(0.92, 1.01), prior_type="uniform", fixed=False, latex=r"n_s"),
-    Parameter(name="As", value=2.1, prior=(1., 3.), prior_type="uniform", fixed=False, latex=r"A_s"),
+    Parameter(name="As", value=2.1, prior=(1., 3.), prior_type="uniform", fixed=False, latex=r"10^9 A_s"),
     Parameter(name="Mnu", value=0.0, prior=(0.0, 0.5), prior_type="uniform", fixed=True, latex=r"\sum m_\nu"),
     Parameter(name="w0", value=-1.0, prior=(-2.0, -0.33), prior_type="uniform", fixed=True, latex=r"w_0"),
     Parameter(name="wa", value=0.0, prior=(-2.0, 2.0), prior_type="uniform", fixed=True, latex=r"w_a"),
@@ -71,6 +75,7 @@ class Params:
         self.counterterm_params = {param.name: param for param in _counterterm_params[emu.counterterm_basis]}
         self.stochastic_params = {param.name: param for param in _stochastic_params}
         self.parameters = {**self.cosmo_params, **self.bias_params, **self.damping_params, **self.counterterm_params, **self.stochastic_params}
+        self.comet_keys = [p.name for p in self.parameters.values()]
         self.coev_params = None
         if coev_params is not None:
             if not isinstance(coev_params, list):
@@ -78,17 +83,56 @@ class Params:
             self.coev_params = coev_params
             for name in self.coev_params:
                 assert name in self.bias_params, f"Co-evolution parameter {name} not recognized in bias parameters."
-                self.bias_params[name].fixed = True
+                if name == "bG2": self.set_derived_param(name, self.bG2_coev)
+                elif name == "bGam3": self.set_derived_param(name, self.bGam3_coev)
+                elif name == "bK2" or name == "bK2t": self.set_derived_param(name, self.bK2_coev)
+                elif name == "btd" or name == "btdt": self.set_derived_param(name, self.btd_coev)
+                else:
+                    raise ValueError(f"Co-evolution for {name} not implemented.")
         self.sigmaR_ref = None  # Only relevant for DESI_DR2 bias basis
+        self.derived_order = []
+
 
     def set_reference_sigmaR(self, sigmaR):
         assert 'DESI_DR2' in self.emu.bias_basis, "Reference sigmaR is only relevant for DESI_DR2 bias basis."
         self.sigmaR_ref = sigmaR
 
+    def add_sampled_param(self, name, value, prior, prior_type="uniform", latex=""):
+        """Helper to add a new sampled parameter on the fly"""
+        if name in self.parameters:
+            raise KeyError(f"Parameter {name} already exists.")
+        new_param = Parameter(name=name, value=value, prior=prior, prior_type=prior_type, fixed=False, derived=False, latex=latex)
+        self.parameters[name] = new_param
+
+    def set_derived_param(self, name, deriv_func, latex=None, exported=False):
+        if name not in self.parameters:
+            self.parameters[name] = Parameter(name=name, value=None, prior=None, prior_type=None, fixed=True, derived=True, derived_func=deriv_func, latex=latex, exported=exported)
+        
+        self.parameters[name].derived = True
+        self.parameters[name].fixed = False
+        self.parameters[name].derived_func = deriv_func
+        self.parameters[name].exported = exported
+        if latex is not None:
+            self.parameters[name].latex = latex
+
+        if name not in self.derived_order:
+            self.derived_order.append(name)
+
+    def export_param(self, name, exported=True):
+        """Helper to set whether a derived parameter should be included in output samples"""
+        if name in self.parameters and self.parameters[name].derived:
+            self.parameters[name].exported = exported
+        else:
+            raise KeyError(f"Parameter {name} not found or not a derived parameter.")
+
     @property
-    def free_param_names(self):
-        """Dynamically get list of free parameter names"""
-        return [name for name, p in self.parameters.items() if not p.fixed]
+    def sampled_param_names(self):
+        return [name for name, p in self.parameters.items() if not p.fixed and not p.derived]
+    
+    @property
+    def exported_derived_names(self):
+        return [name for name, p in self.parameters.items() if p.derived and p.exported]
+        
 
     @property
     def fixed_params_dict(self):
@@ -104,9 +148,9 @@ class Params:
         else:
             return "lambda"
     @property
-    def n_free_params(self):
+    def n_sampled_params(self):
         """Dynamically count number of free parameters"""
-        return len(self.free_param_names)
+        return len(self.sampled_param_names)
     
     @property
     def fixed_cosmo(self):
@@ -114,25 +158,30 @@ class Params:
         return all(self.parameters[name].fixed for name in self.cosmo_params)
     
     @staticmethod
-    def bG2_coev(b1):
+    def bG2_coev(p):
+        b1 = p["b1"]
         return 0.524 - 0.547*b1 + 0.046*b1**2
 
     @staticmethod
-    def bGam3_coev(b1, bG2):
+    def bGam3_coev(p):
+        b1 = p["b1"]
+        bG2 = p["bG2"]
         return -1./6.*(b1-1.) -5./2.*bG2
 
     @staticmethod
-    def bK2_coev(b1):
+    def bK2_coev(p):
+        b1 = p["b1"]
         return -2./7.*(b1 - 1.)
     
     @staticmethod
-    def btd_coev(b1):
+    def btd_coev(p):
+        b1 = p["b1"]
         return 23./42.*(b1 - 1.)
 
 
-    def get_free_params(self):
-        """Return the actual Parameter objects for free parameters"""
-        return [self.parameters[name] for name in self.free_param_names]
+    def get_sampled_params(self):
+        """Return the actual Parameter objects for sampled parameters"""
+        return [self.parameters[name] for name in self.sampled_param_names]
 
     def build_nautilus_prior(self):
         """
@@ -143,7 +192,7 @@ class Params:
         prior = Prior()
         
         # Now this iterates over the dynamic property, so it sees your updates
-        for name in self.free_param_names:
+        for name in self.sampled_param_names:
             p = self.parameters[name]
             if p.prior_type == "uniform":
                 prior.add_parameter(name, dist=p.prior)
@@ -163,26 +212,26 @@ class Params:
         if isinstance(free_values_dict_or_list, dict):
             full_dict.update(free_values_dict_or_list)
         else:
-            # Assume list/array in correct order of self.free_param_names
-            current_free_names = self.free_param_names
-            if len(free_values_dict_or_list) != len(current_free_names):
+            # Assume list/array in correct order of self.sampled_param_names
+            names = self.sampled_param_names
+            if len(free_values_dict_or_list) != len(names):
                 raise ValueError(f"Input length {len(free_values_dict_or_list)} does not match "
-                                 f"number of free params {len(current_free_names)}.")
-            for name, val in zip(current_free_names, free_values_dict_or_list):
+                                 f"number of free params {len(names)}.")
+            for name, val in zip(names, free_values_dict_or_list):
                 full_dict[name] = val
-                
-        if self.coev_params is not None:
-            for name in self.coev_params:
-                if name == "bG2":
-                    full_dict[name] = self.bG2_coev(full_dict["b1"])
-                elif name == "bGam3":
-                    full_dict[name] = self.bGam3_coev(full_dict["b1"], full_dict["bG2"])
-                elif name == "bK2" or name == "bK2t":
-                    full_dict[name] = self.bK2_coev(full_dict["b1"])
-                elif name == "btd" or name == "btdt":
-                    full_dict[name] = self.btd_coev(full_dict["b1"])
+
+        # Compute derived parameters on the fly based on current free and fixed values
+        for name in self.derived_order:
+            param = self.parameters[name]
+            if param.derived_func is not None:
+                if callable(param.derived_func):
+                    full_dict[name] = param.derived_func(full_dict)
+                elif isinstance(param.derived_func, str):
+                    full_dict[name] = self.emu.params[param.derived_func]
                 else:
-                    raise ValueError(f"Co-evolution for {name} not implemented.")
+                    raise ValueError(f"Invalid derived_func for {name}. Must be callable or string key.")
+
+
         if self.emu.bias_basis == "DESI_DR2" and self.sigmaR_ref is not None:
             full_dict['b1t'] = full_dict['b1t'] * self.sigmaR_ref
             full_dict['b2t'] = full_dict['b2t'] * self.sigmaR_ref**2
@@ -193,6 +242,14 @@ class Params:
             full_dict['a2'] = full_dict['a2'] * self.sigmaR_ref**2
             full_dict['a4'] = full_dict['a4'] * self.sigmaR_ref**2
         return full_dict
+    
+    def get_comet_dict(self, full_dict, z):
+        """Extracts the parameters needed for the comet emulator from the full dict, including derived parameters"""
+        comet_dict = {key: full_dict[key] for key in self.comet_keys if key in full_dict}
+        comet_dict['z'] = z
+        return comet_dict
+
+
 
     def set_param_value(self, name, value):
         if name in self.parameters:

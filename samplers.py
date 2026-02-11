@@ -36,17 +36,20 @@ class NautilusSampler(BaseSampler):
         
         # 1. Build the Prior object using our Params helper
         self.prior = self.params.build_nautilus_prior()
+        self.require_blobs = len(self.params.exported_derived_names) > 0
         
         # 2. Define the likelihood wrapper
         # Nautilus passes a dictionary of arguments if the prior was built with names
         def likelihood_wrapper(param_dict):
-            # Convert the distinct free params (dict) into the full dictionary 
-            # required by the emulator/likelihood
-            full_cosmo_dict = self.params.get_full_dict(param_dict)
-            full_cosmo_dict['z'] = self.likelihood.observable.cosmo_fid['z']
+            full_dict = self.params.get_full_dict(param_dict)
+            emu_dict = self.params.get_comet_dict(full_dict, z=self.likelihood.observable.cosmo_fid['z'])
+
+            loglike = self.likelihood.get_loglike(emu_dict) 
+            if self.require_blobs:
+                blobs = [full_dict[name] for name in self.params.exported_derived_names]
+                return loglike, blobs
             
-            # Call the likelihood class
-            return self.likelihood.get_loglike(full_cosmo_dict)
+            return loglike
 
         # 3. Initialize Nautilus Sampler
         self.sampler = Sampler(
@@ -61,9 +64,20 @@ class NautilusSampler(BaseSampler):
         
     def save(self, filename):
         """Save posterior samples to a file"""
-        points, log_w, log_l = self.sampler.posterior()
+
+        if self.require_blobs:
+            points, log_w, log_l, blobs = self.sampler.posterior(return_blobs=True)
+            if blobs.ndim == 1:
+                blobs = blobs[:, None]  # Ensure blobs is 2D for hstack
+            points = np.hstack([points, blobs])
+            names = self.prior.keys + self.params.exported_derived_names
+        else:
+            points, log_w, log_l = self.sampler.posterior()
+            names = self.prior.keys
+        latex_names = [self.params.parameters[n].latex for n in names] 
+
         np.savez(filename, points=points, log_weights=log_w, log_likelihoods=log_l,
-                 names=self.prior.keys, latex_names=[self.params.parameters[n].latex for n in self.prior.keys])
+                 names=names, latex_names=latex_names)
         
 
 class MinuitMinimizer(BaseSampler):
@@ -76,36 +90,32 @@ class MinuitMinimizer(BaseSampler):
         # Minuit will pass the parameters as positional arguments in the order of names
         def cost_function(*args):
             # Convert positional args to dictionary
-            param_dict = dict(zip(self.params.free_param_names, args))
+            param_dict = dict(zip(self.params.sampled_param_names, args))
             full_dict = self.params.get_full_dict(param_dict)
-            
-            # Get Data Chi2
-            # Note: We use get_chi2 directly, not get_loglike
-            chi2_data = self.likelihood.get_chi2(full_dict | {'z': self.likelihood.observable.cosmo_fid['z']})
-            
-            # Get Prior Penalty
-            # log_prior returns ln(P). We need -2*ln(P) to convert to Chi2 scale
-            # If log_prior is -inf (out of bounds), we return infinity
             lp = self.log_prior(full_dict)
             if not np.isfinite(lp):
                 return np.inf
-                
-            chi2_prior = -2.0 * lp
+
             
+            chi2_prior = -2.0 * lp
+            # Get Data Chi2
+            # Note: We use get_chi2 directly, not get_loglike
+            emu_dict = self.params.get_comet_dict(full_dict, z=self.likelihood.observable.cosmo_fid['z'])
+            chi2_data = self.likelihood.get_chi2(emu_dict)
             return chi2_data + chi2_prior
 
         # 2. Setup Initial Values
-        self.free_names = self.params.free_param_names
-        init_values = [self.params.parameters[n].value for n in self.free_names]
+        self.sampled_param_names = self.params.sampled_param_names
+        init_values = [self.params.parameters[n].value for n in self.sampled_param_names]
 
         # 3. Initialize Minuit
         # We pass the cost function, the starting values, and the names
-        self.m = Minuit(cost_function, *init_values, name=self.free_names)
+        self.m = Minuit(cost_function, *init_values, name=self.params.sampled_param_names)
         
         # 4. Configure Limits and Steps
         self.m.errordef = Minuit.LEAST_SQUARES # = 1.0 (for Chi2 minimization)
         
-        for name in self.free_names:
+        for name in self.sampled_param_names:
             p = self.params.parameters[name]
             
             # Set Limits (Critical for Uniform priors)
@@ -118,7 +128,7 @@ class MinuitMinimizer(BaseSampler):
             self.m.errors[name] = step
         
         if verbose:
-            print(f"Initialized Minuit with {len(self.free_names)} free parameters.")
+            print(f"Initialized Minuit with {len(self.params.sampled_param_names)} free parameters.")
 
     def run(self, hesse=True):
         """
