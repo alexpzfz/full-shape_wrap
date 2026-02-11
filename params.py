@@ -44,8 +44,9 @@ _bias_params = {"EggScoSmi": [
     Parameter(name="b1", value=1.0, prior=(0.1, 8.0), prior_type="uniform", fixed=False, latex=r"b_1"),
     Parameter(name="b2", value=0.0, prior=(0, 20), prior_type="gaussian", fixed=False, latex=r"b_2"),
     Parameter(name="bK2", value=0.0, prior=(0, 20), prior_type="gaussian", fixed=False, latex=r"b_{K^2}"),
-    Parameter(name="btd", value=0.0, prior=(0, 80), prior_type="gaussian", fixed=False, latex=r"b_{\rm td}"),
-]}
+    Parameter(name="btd", value=0.0, prior=(0, 80), prior_type="gaussian", fixed=False, latex=r"b_{\rm td}"),]}
+
+_bias_params["DesJeoSch_r"] = [Parameter(name=p.name + "_r", value=p.value, prior=p.prior, prior_type=p.prior_type, fixed=p.fixed, latex=p.latex + "^r") for p in _bias_params["DesJeoSch"]]
 
 _damping_params = [Parameter(name="avir", value=5.0, prior=(0.0, 10.0), prior_type="uniform", fixed=True, latex=r"a_{\rm vir}")]
 
@@ -54,16 +55,18 @@ _counterterm_params = {"Comet": [
     Parameter(name="c2", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"c_2"),
     Parameter(name="c4", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"c_4"),],
     
-    "DESI_DR2": [
+    "DESI": [
     Parameter(name="a0", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"\alpha_0"),
     Parameter(name="a2", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"\alpha_2"),
     Parameter(name="a4", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"\alpha_4"),]}
+_counterterm_params["DESI_r"] = [Parameter(name=p.name + "_r", value=p.value, prior=p.prior, prior_type=p.prior_type, fixed=p.fixed, latex=p.latex + "^r") for p in _counterterm_params["DESI"]]
 
 _stochastic_params = [
     Parameter(name="NP0", value=0.0, prior=(-1., 3.), prior_type="uniform", fixed=True, latex=r"N_{P,0}"),
     Parameter(name="NP20", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"N_{P,2}"),
     Parameter(name="NP22", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"N_{P,22}"),
 ]
+
 
 
 class Params:
