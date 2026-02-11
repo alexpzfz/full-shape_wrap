@@ -121,6 +121,15 @@ class MinuitMinimizer(BaseSampler):
             # Set Limits (Critical for Uniform priors)
             if p.prior_type == 'uniform' and p.prior is not None:
                 self.m.limits[name] = p.prior
+
+            # hardcode limits for comet parameters
+            _comet_limits = {'wc': (0.8, 0.16), 'wb': (0.01930, 0.02535), 'ns': (0.9, 1.03),
+                             'As': (1.0, 3.5), 'Mnu': (0.0, 1.0), 'sigma_12': (0.2, 1.0),
+                             'f': (0.5, 1.05), 'log10As': (np.log(1e10 * 1e-9), np.log(1e10 * 3.5 * 1e-9))}
+            if name in _comet_limits:
+                if p.prior_type == 'gaussian' or (p.prior_type == 'uniform' and p.prior[0] < _comet_limits[name][0] or p.prior[1] > _comet_limits[name][1]):
+                    print(f"Warning: Overriding limits for {name} to {_comet_limits[name]} based on COMET constraints.")
+                    self.m.limits[name] = _comet_limits[name]
             
             # Set Initial Step Size (Heuristic)
             # If value is non-zero, take fraction, else take absolute step
