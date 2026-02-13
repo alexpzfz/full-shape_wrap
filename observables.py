@@ -61,7 +61,12 @@ class PowerSpectrumMultipoles(Observable):
         self._k = k * self.h_fid if not Mpc_units else k
         self._Pell = np.array(Pell) / self.h_fid**3 if not Mpc_units else np.array(Pell)
         self._cov = cov / self.h_fid**6 if cov is not None and not Mpc_units else cov
-        self._kmax = [km * self.h_fid for km in kmax] if kmax is not None and not Mpc_units else kmax
+        self._kmax = kmax
+        if self._kmax is not None and not Mpc_units:
+            if isinstance(self._kmax, list):
+                self._kmax = [km * self.h_fid for km in self._kmax] 
+            else:
+                self._kmax = self._kmax * self.h_fid
     
     def plot(self, ax=None, h_units=False,**kwargs):
         import matplotlib.pyplot as plt

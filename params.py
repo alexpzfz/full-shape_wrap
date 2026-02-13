@@ -42,11 +42,11 @@ _bias_params = {"EggScoSmi": [
 
     "DesJeoSch": [
     Parameter(name="b1", value=1.0, prior=(0.1, 8.0), prior_type="uniform", fixed=False, latex=r"b_1"),
-    Parameter(name="b2", value=0.0, prior=(0, 20), prior_type="gaussian", fixed=False, latex=r"b_2"),
+    Parameter(name="b2t", value=0.0, prior=(0, 20), prior_type="gaussian", fixed=False, latex=r"b_2"),
     Parameter(name="bK2", value=0.0, prior=(0, 20), prior_type="gaussian", fixed=False, latex=r"b_{K^2}"),
     Parameter(name="btd", value=0.0, prior=(0, 80), prior_type="gaussian", fixed=False, latex=r"b_{\rm td}"),]}
 
-_bias_params["DesJeoSch_r"] = [Parameter(name=p.name + "_r", value=p.value, prior=p.prior, prior_type=p.prior_type, fixed=p.fixed, latex=p.latex + "^r") for p in _bias_params["DesJeoSch"]]
+_bias_params["DesJeoSch_r"] = [Parameter(name=p.name + "r", value=p.value, prior=p.prior, prior_type=p.prior_type, fixed=p.fixed, latex=p.latex + "^r") for p in _bias_params["DesJeoSch"]]
 
 _damping_params = [Parameter(name="avir", value=5.0, prior=(0.0, 10.0), prior_type="uniform", fixed=True, latex=r"a_{\rm vir}")]
 
@@ -59,7 +59,7 @@ _counterterm_params = {"Comet": [
     Parameter(name="a0", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"\alpha_0"),
     Parameter(name="a2", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"\alpha_2"),
     Parameter(name="a4", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"\alpha_4"),]}
-_counterterm_params["DESI_r"] = [Parameter(name=p.name + "_r", value=p.value, prior=p.prior, prior_type=p.prior_type, fixed=p.fixed, latex=p.latex + "^r") for p in _counterterm_params["DESI"]]
+_counterterm_params["DESI_r"] = [Parameter(name=p.name + "r", value=p.value, prior=p.prior, prior_type=p.prior_type, fixed=p.fixed, latex=p.latex + "^r") for p in _counterterm_params["DESI"]]
 
 _stochastic_params = [
     Parameter(name="NP0", value=0.0, prior=(-1., 3.), prior_type="uniform", fixed=True, latex=r"N_{P,0}"),
@@ -361,11 +361,11 @@ class Params:
                 if 'sigma_12' in mode:
                     factor_sigmaR = sigma_ref / p['sigma_12']
 
-                if name == 'b1':
+                if name == 'b1_r':
                     return p[name] * factor_sigmaR * factor_ap
-                if name in ['b2', 'b2t', 'g2', 'bK2', 'bG2']:
+                if name in ['b2_r', 'b2t_r', 'g2_r', 'bK2_r', 'bG2_r']:
                     return p[name] * factor_sigmaR**2 * factor_ap
-                if name in ['g21', 'bGam3', 'btd']:
+                if name in ['g21_r', 'bGam3_r', 'btd_r']:
                     return p[name] * factor_sigmaR**4 * factor_ap**2
 
             for name in self.bias_params.keys():
