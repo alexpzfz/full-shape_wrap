@@ -328,27 +328,33 @@ class Params:
             return q_iso, q_ap
 
 
-    def use_reparametrization(self, reparam_bias=False, reparam_counterterms=True,
-                              reparam_stochastic=False, mode='ap', sigma_ref=1.0):
-        if 'ap' in mode:
+    def use_reparametrization(self, bias_mode='ap+sigma_12', counterterms_mode='ap+sigma_12',
+                              stochastic_mode='ap', sigmaR_ref=1.0):
+        require_ap = 'ap' in bias_mode or 'ap' in counterterms_mode or 'ap' in stochastic_mode
+        require_sigma_12 = 'sigma_12' in bias_mode or 'sigma_12' in counterterms_mode or 'sigma_12' in stochastic_mode
+        reparam_counterterms = counterterms_mode in ['ap', 'sigma_12', 'ap+sigma_12']
+        reparam_bias = bias_mode in ['ap', 'sigma_12', 'ap+sigma_12']
+        reparam_stochastic = stochastic_mode in ['ap'] # no sigma_12 required for shot noise
+
+        if require_ap:
             self.set_derived_param('q_iso3', lambda p: self.get_AP_parameters(basis='iso_ap')[0]**3, requires_emu_eval=True, latex=r"q_{\rm iso}^3", exported=True)
         
-        if 'sigma_12' in mode:
+        if require_sigma_12:
             self.set_derived_param('sigma_12', 's12', requires_emu_eval=True, latex=r"\sigma_{12}", exported=True)
 
         if reparam_counterterms:
             def reparam_counterterm_func(p, name):
                 factor = 1.0
-                if 'ap' in mode:
+                if 'ap' in counterterms_mode:
                     factor *= p['q_iso3']
-                if 'sigma_12' in mode:
-                    factor *= sigma_ref**2 / p['sigma_12']**2
+                if 'sigma_12' in counterterms_mode:
+                    factor *= sigmaR_ref**2 / p['sigma_12']**2
                 return p[name] * factor
                 
 
             for name in self.counterterm_params.keys():
                 name_reparam = name + '_r'
-                latex_reparam = self.parameters[name].latex + "^r"
+                latex_reparam = self.add_tilde_to_latex(self.parameters[name].latex)
                 self.add_sampled_param(name_reparam, value=0.0, prior=(0, 500), prior_type="gaussian", latex=latex_reparam)
                 self.set_derived_param(name, lambda p, n=name_reparam: reparam_counterterm_func(p, n), latex=self.parameters[name].latex, exported=True)
 
@@ -356,21 +362,21 @@ class Params:
             def reparam_bias_func(p, name):
                 factor_ap = 1.0
                 factor_sigmaR = 1.0
-                if 'ap' in mode:
+                if 'ap' in bias_mode:
                     factor_ap = np.sqrt(p['q_iso3'])
-                if 'sigma_12' in mode:
-                    factor_sigmaR = sigma_ref / p['sigma_12']
+                if 'sigma_12' in bias_mode:
+                    factor_sigmaR = sigmaR_ref / p['sigma_12']
 
                 if name == 'b1_r':
                     return p[name] * factor_sigmaR * factor_ap
                 if name in ['b2_r', 'b2t_r', 'g2_r', 'bK2_r', 'bG2_r']:
                     return p[name] * factor_sigmaR**2 * factor_ap
                 if name in ['g21_r', 'bGam3_r', 'btd_r']:
-                    return p[name] * factor_sigmaR**4 * factor_ap**2
+                    return p[name] * factor_sigmaR**3 * factor_ap
 
             for name in self.bias_params.keys():
                 name_reparam = name + '_r'
-                latex_reparam = self.parameters[name].latex + "^r"
+                latex_reparam = self.add_tilde_to_latex(self.parameters[name].latex)
                 if name == 'b1':
                     prior_type = 'uniform'
                     prior = (0.5, 4.0)
@@ -380,3 +386,35 @@ class Params:
 
                 self.add_sampled_param(name_reparam, value=0.0, prior=prior, prior_type=prior_type, latex=latex_reparam)
                 self.set_derived_param(name, lambda p, n=name_reparam: reparam_bias_func(p, n), latex=self.parameters[name].latex, exported=True)
+            
+        if reparam_stochastic:
+            def reparam_stochastic_func(p, name):
+                factor = 1.0
+                if 'ap' in stochastic_mode:
+                    factor *= p['q_iso3']
+                return p[name] * factor
+
+            for name in self.stochastic_params.keys():
+                name_reparam = name + '_r'
+                latex_reparam = self.add_tilde_to_latex(self.parameters[name].latex)
+                self.add_sampled_param(name_reparam, value=0.0, prior=(-1e4, 1e4), prior_type="uniform", latex=latex_reparam)
+                self.set_derived_param(name, lambda p, n=name_reparam: reparam_stochastic_func(p, n), latex=self.parameters[name].latex, exported=True)
+    
+
+    @staticmethod
+    def add_tilde_to_latex(latex_str):
+        # separate meain part from any existing superscripts or subscripts
+        main_part = latex_str
+        superscript = ""
+        subscript = ""
+        if '^' in latex_str:
+            main_part, superscript = latex_str.split('^', 1)
+            superscript = '^' + superscript
+        if '_' in main_part:
+            main_part, subscript = main_part.split('_', 1)
+            subscript = '_' + subscript
+        # add tilde to the main part
+        main_part = r"\tilde{" + main_part + "}"
+        # recombine everything
+        return main_part + superscript + subscript
+  
