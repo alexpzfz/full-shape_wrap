@@ -58,9 +58,9 @@ class NautilusSampler(BaseSampler):
             **kwargs,
         )
 
-    def sample(self, verbose=True):
+    def sample(self, **kwargs):
         """Run the Nautilus sampling algorithm"""
-        self.sampler.run(verbose=verbose)
+        self.sampler.run(**kwargs)
         
     def save(self, filename):
         """Save posterior samples to a file"""

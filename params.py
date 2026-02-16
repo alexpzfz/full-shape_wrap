@@ -62,9 +62,9 @@ _counterterm_params = {"Comet": [
 _counterterm_params["DESI_r"] = [Parameter(name=p.name + "r", value=p.value, prior=p.prior, prior_type=p.prior_type, fixed=p.fixed, latex=p.latex + "^r") for p in _counterterm_params["DESI"]]
 
 _stochastic_params = [
-    Parameter(name="NP0", value=0.0, prior=(-1., 3.), prior_type="uniform", fixed=True, latex=r"N_{P,0}"),
-    Parameter(name="NP20", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"N_{P,2}"),
-    Parameter(name="NP22", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"N_{P,22}"),
+    Parameter(name="NP0", value=0.0, prior=(-1., 3.), prior_type="uniform", fixed=True, latex=r"N^P_0"),
+    Parameter(name="NP20", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"N^P_{2,0}"),
+    Parameter(name="NP22", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"N^P_{2,2}"),
 ]
 
 
@@ -403,18 +403,15 @@ class Params:
 
     @staticmethod
     def add_tilde_to_latex(latex_str):
-        # separate meain part from any existing superscripts or subscripts
-        main_part = latex_str
-        superscript = ""
-        subscript = ""
-        if '^' in latex_str:
-            main_part, superscript = latex_str.split('^', 1)
-            superscript = '^' + superscript
-        if '_' in main_part:
-            main_part, subscript = main_part.split('_', 1)
-            subscript = '_' + subscript
-        # add tilde to the main part
-        main_part = r"\tilde{" + main_part + "}"
-        # recombine everything
-        return main_part + superscript + subscript
-  
+        # separate base from the rest of the string
+        base = ''
+        rest = ''
+        i = 0
+        while i < len(latex_str):
+            if latex_str[i] in ['^', '_']:
+                rest = latex_str[i:]
+                break
+            else:
+                base += latex_str[i]
+            i += 1
+        return r"\tilde{" + base + "}" + rest
