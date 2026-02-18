@@ -3,7 +3,8 @@ from observables import Observable, PowerSpectrumMultipoles
 
 class Likelihood:
     """Base class for likelihoods"""
-    def __init__(self, observable, emu, params, am_params=None):
+    def __init__(self, observable, emu, params, am_params=None,
+                 am_from_comet=False):
         self.observable = observable
         self.icov = np.linalg.inv(observable.cov)
         self.nmocks_cov = observable.nmocks_cov
@@ -24,31 +25,49 @@ class Likelihood:
 
         self.do_am = False
         self.am_params = am_params
-        self.am_priors = None
         if self.am_params is not None:
             if not isinstance(self.am_params, list):
                 self.am_params = [self.am_params]
              # check that all am_params are in bias, counterterms or stochastic
             for am_param in self.am_params:
-                if am_param not in self.params.bias_params and am_param not in self.params.counterterm_params and am_param not in self.params.stochastic_params:
+                am_param_base = am_param.replace('_r', '') if am_param.endswith('_r') else am_param
+                if am_param_base not in self.params.bias_params and am_param_base not in self.params.counterterm_params and am_param_base not in self.params.stochastic_params:
                     raise ValueError(f"AM parameter '{am_param}' not found in bias, counterterm or stochastic parameters.")
                 # check that gaussian priors are set for all am_params
                 if self.params.parameters[am_param].prior is None or self.params.parameters[am_param].prior_type != 'gaussian':
                     raise ValueError(f"AM parameter '{am_param}' must have a Gaussian prior defined.")
-            # for the moment we use comet's chi2 function for AM
-            n_realizations = observable.nmocks_cov if observable.nmocks_cov is not None else None
-            theory_cov = True if self.nmocks_cov is None else False
-            emu.define_data_set(obs_id='pk', bins=observable._k, signal=observable._Pell.T, cov=observable._cov,
-                                theory_cov=theory_cov, n_realizations=n_realizations, zeff=observable.cosmo_fid['z'],
-                                fiducial_cosmology=observable.cosmo_fid)
-            self.do_am = True
-            self.am_priors = {am_param: list(self.params.parameters[am_param].prior) for am_param in self.am_params}
+                
+                # make sure these params are initialized to zero and now keep them fixed to zero in the sampler
+                self.params.parameters[am_param].value = 0.0
+                self.params.parameters[am_param].fixed = True
 
+                if am_param.endswith('_r'):
+                    self.params.parameters[am_param_base].fixed = True
+                    self.params.parameters[am_param_base].value = 0.0
+                    self.params.parameters[am_param_base].derived = False
+        
+            # # for the moment we use comet's chi2 function for AM
+            if am_from_comet:
+                n_realizations = observable.nmocks_cov if observable.nmocks_cov is not None else None
+                theory_cov = True if self.nmocks_cov is None else False
+                emu.define_data_set(obs_id='pk', bins=observable._k, signal=observable._Pell.T, cov=observable._cov,
+                                    theory_cov=theory_cov, n_realizations=n_realizations, zeff=observable.cosmo_fid['z'],
+                                    fiducial_cosmology=observable.cosmo_fid)
+                self.am_priors = {am_param: self.params.parameters[am_param].prior for am_param in self.am_params}
+
+            # self.do_am = True
+            self.do_am = True
+            self.am_params_0 = np.array([self.params.parameters[am_param].prior[0] for am_param in self.am_params])
+            self.am_inv_cov = np.diag([1/self.params.parameters[am_param].prior[1]**2 for am_param in self.am_params])
+            self.am_det_cov = np.prod([self.params.parameters[am_param].prior[1]**2 for am_param in self.am_params])
             
         if observable.__class__ == PowerSpectrumMultipoles:
             self.get_chi2 = self._get_chi2_powerspectrum
             if self.do_am:
-                self.get_chi2 = self._get_chi2_am_from_comet
+                #self.get_chi2 = self._get_chi2_am_from_comet
+                self.get_chi2 = self._get_chi2_powerspectrum_am
+                if am_from_comet:
+                    self.get_chi2 = self._get_chi2_am_from_comet
 
         # if self.params.fixed_cosmo:
         #     print("All cosmological parameters are fixed. Likelihood will only depend on nuisance parameters.")
@@ -67,14 +86,25 @@ class Likelihood:
         self.icov *= factor
 
     def _get_chi2_powerspectrum(self, params):
-        pred = self.emu.Pell(self.x, params=params, ell=self.observable.ell, de_model=self.de_model)
+        comet_params = self.params.get_comet_dict(params)
+        pred = self.emu.Pell(self.x, params=comet_params, ell=self.observable.ell, de_model=self.de_model)
         y_model = np.concatenate([pred[f'ell{l}'] for l in self.observable.ell])
         delta = self.y - y_model
         chi2 = np.dot(delta, np.dot(self.icov, delta))
         return chi2
 
+    def _get_chi2_powerspectrum_am(self, params):
+        comet_params = self.params.get_comet_dict(params)
+        pred = self.emu.Pell(self.x, params=comet_params, ell=self.observable.ell, de_model=self.de_model)
+        y_model = np.concatenate([pred[f'ell{l}'] for l in self.observable.ell])
+        delta = self.y - y_model
+        dm = self.get_design_matrix_ps(params)
+        chi2 = self.marg_chi2(delta, self.icov, self.am_params_0, self.am_inv_cov, self.am_det_cov, dm)
+        return chi2
+
     def _get_chi2_am_from_comet(self, params):
-        chi2 = self.emu.chi2(obs_id='pk', params=params, kmax=self.observable._kmax, de_model=self.de_model, AM_priors=self.am_priors)
+        comet_params = self.params.get_comet_dict(params)
+        chi2 = self.emu.chi2(obs_id='pk', params=comet_params, kmax=self.observable._kmax, de_model=self.de_model, AM_priors=self.am_priors)
         chi2 = float(chi2)  # Ensure chi2 is a scalar float, not a 0-dim array
         return chi2
 
@@ -82,4 +112,34 @@ class Likelihood:
         chi2 = self.get_chi2(params)
         loglike = -0.5 * chi2
         return loglike
+
+    @staticmethod
+    def marg_chi2(diff, dcov_inv, p0_vec, pcov_inv, detpcov, design_mat):
+        res = diff - design_mat @ p0_vec
+        lamb = design_mat.T @ dcov_inv @ design_mat + pcov_inv
+        lamb_inv = np.linalg.inv(lamb) if lamb.shape[0] > 1 else 1/lamb
+        detlamb = np.linalg.det(lamb) if lamb.shape[0] > 1 else lamb
+        chi2 =  res.T @ dcov_inv @ res
+        chi2 = chi2  - res.T @ dcov_inv @ design_mat @ lamb_inv @ design_mat.T @ dcov_inv @ res
+        chi2 = chi2 + np.log(np.abs(detlamb)) + np.log(np.abs(detpcov))  # Include detpcov in log
+        chi2 = chi2[0][0] if lamb.shape[0] == 1 else chi2  # If lamb is 1D, return scalar chi2 
+        return chi2 
     
+    def get_design_matrix_ps(self, params):
+        comet_params = self.params.get_comet_dict(params)
+        design_mat = np.zeros((len(self.y), len(self.am_params)))
+        for i, param in enumerate(self.am_params):
+            if param.endswith('_r'):
+                param_base = param.replace('_r', '')
+                factor = self.params.get_reparam_factor(params, param)
+            else:
+                param_base = param
+                factor = 1.0
+            diag_to_marg = self.emu.diagrams_to_marg[param_base]
+            bx = self.emu._get_bias_coeff_for_AM(diag_to_marg)
+            bx *= factor
+            px_ell = self.emu.PX_ell(self.x, comet_params, self.observable.ell, diag_to_marg, de_model=self.de_model)
+            m_vec = np.concatenate([px_ell[f'ell{l}'] for l in self.observable.ell])
+            m_vec *= bx
+            design_mat[:, i] = m_vec
+        return design_mat

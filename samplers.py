@@ -42,9 +42,7 @@ class NautilusSampler(BaseSampler):
         # Nautilus passes a dictionary of arguments if the prior was built with names
         def likelihood_wrapper(param_dict):
             full_dict = self.params.get_full_dict(param_dict)
-            emu_dict = self.params.get_comet_dict(full_dict)
-
-            loglike = self.likelihood.get_loglike(emu_dict) 
+            loglike = self.likelihood.get_loglike(full_dict) 
             if self.require_blobs:
                 blobs = [full_dict[name] for name in self.params.exported_derived_names]
                 return loglike, blobs
@@ -92,7 +90,7 @@ class MinuitMinimizer(BaseSampler):
             # Convert positional args to dictionary
             param_dict = dict(zip(self.params.sampled_param_names, args))
             full_dict = self.params.get_full_dict(param_dict)
-            lp = self.log_prior(full_dict)
+            lp = self.log_prior(param_dict)
             if not np.isfinite(lp):
                 return np.inf
 
@@ -100,8 +98,7 @@ class MinuitMinimizer(BaseSampler):
             chi2_prior = -2.0 * lp
             # Get Data Chi2
             # Note: We use get_chi2 directly, not get_loglike
-            emu_dict = self.params.get_comet_dict(full_dict)
-            chi2_data = self.likelihood.get_chi2(emu_dict)
+            chi2_data = self.likelihood.get_chi2(full_dict)
             return chi2_data + chi2_prior
 
         # 2. Setup Initial Values
