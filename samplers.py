@@ -97,7 +97,7 @@ class MinuitMinimizer(BaseSampler):
             
             chi2_prior = -2.0 * lp
             # Get Data Chi2
-            # Note: We use get_chi2 directly, not get_loglike
+            # Note: We use get_chi2 directly, not get_loglike 
             chi2_data = self.likelihood.get_chi2(full_dict)
             return chi2_data + chi2_prior
 

@@ -1,10 +1,11 @@
 import numpy as np
 from observables import Observable, PowerSpectrumMultipoles
+import params
 
 class Likelihood:
     """Base class for likelihoods"""
     def __init__(self, observable, emu, params, am_params=None,
-                 am_from_comet=False, conditional_prior=None):
+                 am_sample = True, am_from_comet=False, conditional_prior=None):
         self.observable = observable
         self.icov = np.linalg.inv(observable.cov)
         self.nmocks_cov = observable.nmocks_cov
@@ -28,6 +29,7 @@ class Likelihood:
 
         self.do_am = False
         self.am_params = am_params
+        self.am_sample = am_sample
         if self.am_params is not None:
             if not isinstance(self.am_params, list):
                 self.am_params = [self.am_params]
@@ -43,11 +45,15 @@ class Likelihood:
                 # make sure these params are initialized to zero and now keep them fixed to zero in the sampler
                 self.params.parameters[am_param].value = 0.0
                 self.params.parameters[am_param].fixed = True
+                if self.am_sample:
+                    self.params.parameters[am_param].derived_am = True
+                    self.params.parameters[am_param].exported = True
 
                 if am_param.endswith('_r'):
                     self.params.parameters[am_param_base].fixed = True
                     self.params.parameters[am_param_base].value = 0.0
                     self.params.parameters[am_param_base].derived = False
+                    
         
             # # for the moment we use comet's chi2 function for AM
             if am_from_comet:
@@ -79,7 +85,8 @@ class Likelihood:
                     return np.inf  # Return infinite chi2 if prior condition is not satisfied
                 return old_get_chi2(params)
             self.get_chi2 = get_chi2_with_prior
-        
+
+     
         # if self.params.fixed_cosmo:
         #     print("All cosmological parameters are fixed. Likelihood will only depend on nuisance parameters.")
         #     self.pell_func = emu.Pell_fixed_cosmo_boost
@@ -110,7 +117,13 @@ class Likelihood:
         y_model = np.concatenate([pred[f'ell{l}'] for l in self.observable.ell])
         delta = self.y - y_model
         dm = self.get_design_matrix_ps(params)
-        chi2 = self.marg_chi2(delta, self.icov, self.am_params_0, self.am_inv_cov, self.am_det_cov, dm)
+        if not self.am_sample:
+            chi2 = self.marg_chi2(delta, self.icov, self.am_params_0, self.am_inv_cov, self.am_det_cov, dm)
+        else:
+            chi2, cond_mean, cond_cov = self.marg_chi2(delta, self.icov, self.am_params_0, self.am_inv_cov,
+                                                        self.am_det_cov, dm, return_cond_mean_cov=True)
+        self.sample_cond_am(params, cond_mean, cond_cov) 
+
         return chi2
 
     def _get_chi2_am_from_comet(self, params):
@@ -125,16 +138,22 @@ class Likelihood:
         return loglike
 
     @staticmethod
-    def marg_chi2(diff, dcov_inv, p0_vec, pcov_inv, detpcov, design_mat):
+    def marg_chi2(diff, dcov_inv, p0_vec, pcov_inv, detpcov, design_mat,
+                  return_cond_mean_cov=False):
         res = diff - design_mat @ p0_vec
         lamb = design_mat.T @ dcov_inv @ design_mat + pcov_inv
         lamb_inv = np.linalg.inv(lamb) if lamb.shape[0] > 1 else 1/lamb
         detlamb = np.linalg.det(lamb) if lamb.shape[0] > 1 else lamb
+        b = design_mat.T @ dcov_inv @ res
         chi2 =  res.T @ dcov_inv @ res
-        chi2 = chi2  - res.T @ dcov_inv @ design_mat @ lamb_inv @ design_mat.T @ dcov_inv @ res
+        chi2 = chi2  - b.T @ lamb_inv @ b
         chi2 = chi2 + np.log(np.abs(detlamb)) + np.log(np.abs(detpcov))  # Include detpcov in log
         chi2 = chi2[0][0] if lamb.shape[0] == 1 else chi2  # If lamb is 1D, return scalar chi2 
-        return chi2 
+        if return_cond_mean_cov:
+            cond_mean = lamb_inv @ (b + pcov_inv @ p0_vec)
+            cond_cov = lamb_inv
+            return chi2, cond_mean, cond_cov
+        return chi2
     
     def get_design_matrix_ps(self, params):
         comet_params = self.params.get_comet_dict(params)
@@ -165,4 +184,13 @@ class Likelihood:
             def combined_prior(params):
                 return old_prior(params) and conditional_prior(params)
             self.conditional_prior = combined_prior
-            
+
+    def sample_cond_am(self, params, mean, cov):
+        if len(self.am_params) == 1:
+            am_param = self.am_params[0]
+            sample = np.random.normal(mean, np.sqrt(cov))
+            params[am_param] = sample
+        else:
+            sample = np.random.multivariate_normal(mean, cov)
+            for i, am_param in enumerate(self.am_params):
+                params[am_param] = sample[i]

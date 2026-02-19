@@ -12,6 +12,7 @@ class Parameter:
     derived: bool = False  # True if this parameter is derived from others (e.g. co-evolution)
     derived_func: Optional[Union[Callable, str]] = None  # Function to compute derived parameter, or name from emu params dict
     requires_emu_eval: bool = False # Whether this derived parameter requires an emulator evaluation (e.g. depends on PLin)
+    derived_am: bool = False # Only relevant for analytical marginalization
     exported: bool = False # Only relevant if derived=True, whether to include this parameter in the output samples
     latex: str = ""
 
@@ -139,7 +140,7 @@ class Params:
     
     @property
     def exported_derived_names(self):
-        return [name for name, p in self.parameters.items() if p.derived and p.exported]
+        return [name for name, p in self.parameters.items() if (p.derived or p.derived_am) and p.exported]
         
 
     @property
