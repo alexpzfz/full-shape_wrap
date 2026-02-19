@@ -1,6 +1,6 @@
 import numpy as np
-from scipy.special import legendre, sph_harm
-from sympy.physics.wigner import wigner_3j
+from scipy.special import legendre
+#from sympy.physics.wigner import wigner_3j
 
 
 def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, nbar=1.0,**kwargs):
@@ -14,13 +14,15 @@ def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, nbar=1.0,**kwargs):
     pdw3 = pdw[np.searchsorted(kunique, k3)]
 
     b1, b2, g2, f = params['b1'], params['b2'], params['g2'], params['f']
-    mu3 = - (mu1 * k1 + mu2 * k2) / k3
+    # handle division by zero
+    mu3 = np.where(k3 > 0, - (mu1 * k1 + mu2 * k2) / k3, -1.0)
 
     # Apply AP effect
     qpar, qperp = params['q_lo'], params['q_tr']
-    k1_p, mu1_p = apply_ap(k1, mu1, qpar, qperp) # shape (ntri, m, n)
-    k2_p, mu2_p = apply_ap(k2, mu2, qpar, qperp) # shape (ntri, m, n)
-    k3_p, mu3_p = apply_ap(k3, mu3, qpar, qperp) #
+    qiso6 = qpar**2 * qperp**4
+    k1_p, mu1_p = apply_ap(k1, mu1, qpar, qperp) 
+    k2_p, mu2_p = apply_ap(k2, mu2, qpar, qperp)
+    k3_p, mu3_p = apply_ap(k3, mu3, qpar, qperp)
     
     # tree level first
     btree = tree_term(k1_p, k2_p, mu1_p, mu2_p, k3_p, mu3_p, b1, b2, g2, f) * pdw1 * pdw2 + \
@@ -41,6 +43,7 @@ def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, nbar=1.0,**kwargs):
     lambda2 = -0.5 * f**2 * (k1_p**2 * mu1_p**2 + k2_p**2 * mu2_p**2 + k3_p**2 * mu3_p**2)
     winfty = w_B_infty(lambda2, avir, sv)
     bvdg = winfty * btree + bstoch
+    bvdg = bvdg / qiso6
     return bvdg
 
 
@@ -84,7 +87,7 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[0, 2], nbar=
         res[f'ell{ll}'] = bell
     return res
 
-# def bispectrum_sugiyama_proj(k1k2, emu, comet_params, ell=['000'], nbar=1.0, **kwargs):
+# def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=['000'], nbar=1.0, **kwargs):
 #     # k1k2 must be of shape (n, 2) where n is the number of triangles, and the two columns are k1 and k2. We will reconstruct k3 using the triangle condition.
 #     nmu1 = kwargs.pop('nmu1', 20)
 #     nmu2 = kwargs.pop('nmu2', 20)
@@ -99,38 +102,37 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[0, 2], nbar=
 #     phi_grid = phi_grid[None, :, :, :] # shape (1, nmu1, nmu2, nphi)
 #     # \vec{k1} = (k1sin(theta1), 0, k1cos(theta1))
 #     # \vec{k2} = (k2sin(theta2)cos(phi), k2sin(theta2)sin(phi), k2cos(theta2))
-#     k1 = k1k2[:, 0][:, None, None, None] # shape (n, 1, 1, 1)
-#     k2 = k1k2[:, 1][:, None, None, None] # shape (n, 1, 1, 1)
+#     k1 = k1[:, None, None, None] # shape (n, 1, 1, 1)
+#     k2 = k2[:, None, None, None] # shape (n, 1, 1, 1)
 #     # reconstruc k3 from the triangle condition
 #     # mu12 = dot(k1, k2) / (|k1| |k2|)
-#     mu12 = np.sqrt(1 - mu1_grid**2) * np.sqrt(1 - mu2_grid**2) * np.cos(phi_grid) +  mu1_grid * mu2_grid # shape (nmu1, nmu2, nphi) 
+#     mu12 = np.sqrt(1 - mu1_grid**2) * np.sqrt(1 - mu2_grid**2) * np.cos(phi_grid) +  mu1_grid * mu2_grid # shape (1, nmu1, nmu2, nphi)
 #     mu12 = np.clip(mu12, -1, 1) # ensure mu12 is in the range [-1, 1] to avoid numerical issues with sqrt
-#     k3 = np.sqrt(k1**2 + k2**2 - 2 * k1 * k2 * mu12)
-#     tri = np.zeros((len(k1k2)*nmu1*nmu2*nphi, 3))
-#     tri[:, 0] = np.repeat(k1k2[:, 0], nmu1*nmu2*nphi)
-#     tri[:, 1] = np.repeat(k1k2[:, 1], nmu1*nmu2*nphi)
-#     tri[:, 2] = k3.flatten()
+#     mu12 = np.where(mu12==0.0, 1e-10, mu12) # avoid exact zeros to prevent numerical issues
 
-#     #bfull = bispectrum_vdg(tri, mu1_grid.reshape(nmu1*nphi, nmu1*nphi), mu2_grid.reshape, emu, comet_params, nbar=nbar, **kwargs) # shape (n*nmu1*nmu2*nphi, nmu1, nmu2, nphi)
-#     #bfull = bispectrum_vdg(tri, mu1_grid, mu2_grid, emu, comet_params, nbar=nbar, **kwargs) # shape (n*nmu1*nmu2*nphi, nmu1, nmu2, nphi)
-#     bfull = bfull.reshape(len(k1k2), nmu1*nmu2*nphi, nmu1, nmu2, nphi) # shape (n, nmu1*nmu2*nphi, nmu1, nmu2, nphi)
-#     basis = np.zeros_like(bfull, dtype=complex) # shape (ntri, nmu, nphi)
+#     k3sqr = k1**2 + k2**2 - 2 * k1 * k2 * mu12 # shape (n, nmu1, nmu2, nphi)
+#     k3sqr = np.where(k3sqr > 0, k3sqr, 0) # ensure k3^2 is non-negative to avoid numerical issues with sqrt
+#     k3 = np.sqrt(k3sqr) # shape (n, nmu1, nmu2, nphi)
+#     k3 = np.where(k3 > 0, k3, 1e-10) # avoid exact zeros to prevent numerical issues
+
+#     bfull = bispectrum_vdg(k1, k2, k3, mu1_grid, mu2_grid, emu, comet_params, nbar=nbar, **kwargs) # shape (n, nmu1, nmu2, nphi)
 #     res = {}
-#     for b in ell:
-#         l1, l2, L = map(int, b)
+#     for ll in ell:
+#         l1, l2, L = map(int, ll)
+#         integrand = 0
+#         # need a single m
 #         for m in range(-min(l1, l2), min(l1, l2)+1):
-#             w3j = float(wigner_3j(l1, l2, L, m, -m, 0))
-#             if w3j == 0:
+#             w3j = wigner(l1, l2, L, m)
+#             if w3j is None or w3j == 0:
 #                 continue
-#             Y1 = sph_harm(m, l1, phi_grid, np.arccos(mu1_grid)) # shape (1, nmu, nphi)
-#             Y2 = sph_harm(-m, l2, phi_grid, np.arccos(mu2_grid)) # shape (1, nmu, nphi)
-#             cg_weight = (-1.0)**(l1 - l2) * np.sqrt(2 * L + 1) * w3j
-#             basis = basis + cg_weight * Y1 * Y2
-#             integrand = bfull * np.conj(basis) * w_mu1[None, :, None] * w_mu2[None, None, :] * w_phi
-#             integral = np.sum(integrand, axis=(1, 2)) # shape (ntri,)
-#             norm =(2*l1 + 1) * (2*l2 + 1) / (4 * np.pi)
-#             bell = norm * integral
-#             res[f'{b}'] = bell.real
+#             y1 = sph_harm(l1, m, mu1_grid, 0)
+#             y2 = sph_harm(l2, -m, mu2_grid, phi_grid)
+#             integrand += w3j * y1 * y2
+#         integrand = integrand * bfull * w_mu1[None, :, None, None] * w_mu2[None, None, :, None] * w_phi
+#         integral = np.sum(integrand, axis=(1, 2, 3))
+#         prefactor = (2*l1 + 1) * (2*l2 + 1) * (2*L + 1) / (4 * np.pi)
+#         res[f'{ll}'] = prefactor * integral
+
 #     return res
 
 
@@ -179,3 +181,46 @@ def apply_ap(k, mu, qpar, qperp):
     k_p = k / qperp * np.sqrt(1 + mu**2 * (1/F**2 - 1))
     mu_p = mu / F / np.sqrt(1 + mu**2 * (1/F**2 - 1))
     return k_p, mu_p
+
+
+
+def sph_harm(l, m, costheta, phi):
+    # m must be in the range [-l, l]
+    assert abs(m) <= l, "m must be in the range [-l, l]"
+    norm = np.sqrt(4 * np.pi / (2 * l + 1))
+    if l == 0 and m == 0:
+        return norm * 1/2 * np.sqrt(1/np.pi)
+    elif l == 1 and m == 0:
+        return norm * np.sqrt(3/(4*np.pi)) * costheta
+    elif l == 1 and m == 1:
+        return -norm * np.sqrt(3/(8*np.pi)) * np.exp(1j * phi) * np.sqrt(1 - costheta**2)
+    elif l == 1 and m == -1:
+        return norm * np.sqrt(3/(8*np.pi)) * np.exp(-1j * phi) * np.sqrt(1 - costheta**2)
+    elif l == 2 and m == 0:
+        return norm * np.sqrt(5/(16*np.pi)) * (3*costheta**2 - 1)
+    elif l == 2 and m == 1:
+        return -norm * np.sqrt(15/(8*np.pi)) * np.exp(1j * phi) * costheta * np.sqrt(1 - costheta**2)
+    elif l == 2 and m == -1:
+        return norm * np.sqrt(15/(8*np.pi)) * np.exp(-1j * phi) * costheta * np.sqrt(1 - costheta**2)
+    elif l == 2 and m == 2:
+        return norm * np.sqrt(15/(32*np.pi)) * np.exp(2j * phi) * (1 - costheta**2)
+    elif l == 2 and m == -2:
+        return norm * np.sqrt(15/(32*np.pi)) * np.exp(-2j * phi) * (1 - costheta**2)
+    else:
+        raise NotImplementedError("Only implemented for l=0,1,2 and corresponding m")
+
+def wigner(l1, l2, L, m):
+    # (l1 l2 L)
+    # (m -m 0)
+    if L == 0:
+        res = (-1)**(l1 - m) / np.sqrt(2 * l1 + 1) if l1 == l2 else 0
+    elif L == 2:
+        if l1 == l2:
+            res = (-1)**(l1 - m) * np.sqrt((2*l1 + 1) * (l1*(l1+1) - 3*m**2)) / np.sqrt(6 * (l1-1)*l1*(l1+1)*(l1+2))
+        elif abs(l1 - l2) == 2:
+            res = (-1)**(min(l1, l2) - m) * np.sqrt((5*(2*min(l1, l2)+1)*(max(l1, l2)-min(l1, l2))*(max(l1, l2)+min(l1, l2)+1)) / (6 * (max(l1, l2)-min(l1, l2)+3)*(max(l1, l2)-min(l1, l2)+4)))
+        else:
+            res = 0
+    else:
+        raise NotImplementedError("Only implemented for L=0 and L=2")
+    return res
