@@ -87,6 +87,7 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[0, 2], nbar=
         res[f'ell{ll}'] = bell
     return res
 
+
 # def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=['000'], nbar=1.0, **kwargs):
 #     # k1k2 must be of shape (n, 2) where n is the number of triangles, and the two columns are k1 and k2. We will reconstruct k3 using the triangle condition.
 #     nmu1 = kwargs.pop('nmu1', 20)

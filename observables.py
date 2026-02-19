@@ -25,7 +25,11 @@ class Observable:
             xmax = [xmax] * self.n_obs
         masks = []
         for i in range(self.n_obs):
-            mask = (self.x[i] >= xmin[i]) & (self.x[i] <= xmax[i])
+            # depending on the shape of x[i]
+            if self.x[i].ndim == 1:
+                mask = (self.x[i] >= xmin[i]) & (self.x[i] <= xmax[i])
+            else:
+                mask = np.all((self.x[i] >= xmin[i]) & (self.x[i] <= xmax[i]), axis=1)
             self.x[i] = self.x[i][mask]
             self.y[i] = self.y[i][mask]
             masks.append(mask)
@@ -86,3 +90,56 @@ class PowerSpectrumMultipoles(Observable):
         
         ax.legend()
         return ax
+
+class BispectrumScoccimarroMultipoles(Observable):
+    def __init__(self, tri, Bell, cov=None, nbar=None, cosmo_fid=None, Mpc_units=False, kmin=None, kmax=None, nmocks_cov=None):
+        super().__init__(tri, Bell, cov, nbar, cosmo_fid, xmin=kmin, xmax=kmax, nmocks_cov=nmocks_cov)
+        if not Mpc_units:
+            assert getattr(self, 'h_fid') is not None, "h value is required to convert to Mpc units"
+            self.x = [xi * self.h_fid for xi in self.x]
+            self.y = [yi / self.h_fid**6 for yi in self.y]
+            self.nbar = self.nbar * self.h_fid**3 if self.nbar is not None else None
+            if cov is not None:
+                self.cov = self.cov / self.h_fid**12
+        self.tri = self.x
+        self.Bell = self.y
+        self.ell = [2*i for i in range(self.n_obs)]
+
+
+    def plot(self, ax=None, h_units=False, **kwargs):
+        import matplotlib.pyplot as plt
+        if ax is None:
+            fig, ax = plt.subplots()
+        factor = 1.0
+        if h_units and getattr(self, 'h_fid') is not None:
+            factor = self.h_fid
+            ax.set_xlabel(r'Triangle index')
+            ax.set_ylabel(r'$B_\ell(k_1, k_2, k_3) ~ [h^{-6} ~ \mathrm{Mpc}^6]$')
+        else:
+            ax.set_xlabel(r'Triangle index')
+            ax.set_ylabel(r'$B_\ell(k_1, k_2, k_3) ~ [\mathrm{Mpc}^6]$')
+        for i in range(self.n_obs):
+            err = np.sqrt(np.diag(self.cov))[sum(len(yi) for yi in self.y[:i]):sum(len(yi) for yi in self.y[:i+1])]
+            tindex = np.arange(len(self.y[i]))
+            ax.errorbar(tindex, self.y[i] * factor**6, yerr=err * factor**6, label=fr'$\ell = {{{2*i}}}$', fmt='o', **kwargs)
+        
+        ax.legend()
+        return ax
+        
+
+class JointObservable(Observable):
+    def __init__(self, obs1, obs2, cov=None):
+        assert obs1.cosmo_fid == obs2.cosmo_fid, "Observables must have the same fiducial cosmology"
+        self.obs1 = obs1
+        self.obs2 = obs2
+        x = obs1.x + obs2.x
+        y = obs1.y + obs2.y
+        if cov is None:
+            print("No covariance matrix provided for joint observable, constructing block diagonal covariance matrix")
+            cov = self.get_block_cov(obs1.cov, obs2.cov)
+        else:
+            assert cov.shape == (obs1.n_data + obs2.n_data, obs1.n_data + obs2.n_data), "Covariance matrix has wrong shape" 
+        super().__init__(x, y, cov=cov, nbar=obs1.nbar, cosmo_fid=obs1.cosmo_fid)
+
+    def get_block_cov(self, cov1, cov2):
+        return np.block([[cov1, np.zeros((cov1.shape[0], cov2.shape[1]))], [np.zeros((cov2.shape[0], cov1.shape[1])), cov2]])
