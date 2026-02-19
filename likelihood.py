@@ -30,6 +30,7 @@ class Likelihood:
         self.do_am = False
         self.am_params = am_params
         self.am_sample = am_sample
+        self.am_sample_mode = None if not self.am_sample else 'sample' # 'sample' or 'map'
         if self.am_params is not None:
             if not isinstance(self.am_params, list):
                 self.am_params = [self.am_params]
@@ -122,7 +123,7 @@ class Likelihood:
         else:
             chi2, cond_mean, cond_cov = self.marg_chi2(delta, self.icov, self.am_params_0, self.am_inv_cov,
                                                         self.am_det_cov, dm, return_cond_mean_cov=True)
-        self.sample_cond_am(params, cond_mean, cond_cov) 
+            self.sample_cond_am(params, cond_mean, cond_cov, mode=self.am_sample_mode) 
 
         return chi2
 
@@ -185,12 +186,18 @@ class Likelihood:
                 return old_prior(params) and conditional_prior(params)
             self.conditional_prior = combined_prior
 
-    def sample_cond_am(self, params, mean, cov):
+    def sample_cond_am(self, params, mean, cov, mode='sample'):
         if len(self.am_params) == 1:
             am_param = self.am_params[0]
-            sample = np.random.normal(mean, np.sqrt(cov))
-            params[am_param] = sample
+            if mode == 'sample':
+                value = np.random.normal(mean, np.sqrt(cov))
+            else:
+                value = mean  # MAP estimate
+            params[am_param] = value
         else:
-            sample = np.random.multivariate_normal(mean, cov)
+            if mode == 'sample':
+                value = np.random.multivariate_normal(mean, cov)
+            else:
+                value = mean  # MAP estimate
             for i, am_param in enumerate(self.am_params):
-                params[am_param] = sample[i]
+                params[am_param] = value[i]
