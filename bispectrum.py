@@ -3,19 +3,18 @@ from scipy.special import legendre, sph_harm
 from sympy.physics.wigner import wigner_3j
 
 
-def bispectrum_vdg(tri, mu1, mu2, emu, comet_params, nbar=1.0,**kwargs):
-    kunique = np.unique(tri.flatten())
+def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, nbar=1.0,**kwargs):
+    # k1, k2, k3 are either arrays of any shape or floats
+    k_all = np.concatenate([np.ravel(k1), np.ravel(k2), np.ravel(k3)])
+    kunique = np.unique(k_all)
     pdw = emu.Pdw(kunique, comet_params, **kwargs)
     params = emu.params
+    pdw1 = pdw[np.searchsorted(kunique, k1)]
+    pdw2 = pdw[np.searchsorted(kunique, k2)]
+    pdw3 = pdw[np.searchsorted(kunique, k3)]
 
-    k_idx = {k: i for i, k in enumerate(kunique)}
-    pdw = np.array([pdw[k_idx[k]] for k in tri.flatten()]).reshape(tri.shape)
-    # pwd needs to have the same shape as tri!
-    # mu1 must be of shape (ntri, m, n)
-    k1, k2, k3 = tri[:, 0][:, None, None], tri[:, 1][:, None, None], tri[:, 2][:, None, None]
     b1, b2, g2, f = params['b1'], params['b2'], params['g2'], params['f']
     mu3 = - (mu1 * k1 + mu2 * k2) / k3
-    pdw = pdw[:, :, None, None]
 
     # Apply AP effect
     qpar, qperp = params['q_lo'], params['q_tr']
@@ -24,17 +23,17 @@ def bispectrum_vdg(tri, mu1, mu2, emu, comet_params, nbar=1.0,**kwargs):
     k3_p, mu3_p = apply_ap(k3, mu3, qpar, qperp) #
     
     # tree level first
-    btree = tree_term(k1_p, k2_p, mu1_p, mu2_p, k3_p, mu3_p, b1, b2, g2, f) * pdw[:,0] * pdw[:,1] + \
-            tree_term(k2_p, k3_p, mu2_p, mu3_p, k1_p, mu1_p, b1, b2, g2, f) * pdw[:,1] * pdw[:,2] + \
-            tree_term(k3_p, k1_p, mu3_p, mu1_p, k2_p, mu2_p, b1, b2, g2, f) * pdw[:,2] * pdw[:,0]
+    btree = tree_term(k1_p, k2_p, mu1_p, mu2_p, k3_p, mu3_p, b1, b2, g2, f) * pdw1 * pdw2 + \
+            tree_term(k2_p, k3_p, mu2_p, mu3_p, k1_p, mu1_p, b1, b2, g2, f) * pdw2 * pdw3 + \
+            tree_term(k3_p, k1_p, mu3_p, mu1_p, k2_p, mu2_p, b1, b2, g2, f) * pdw3 * pdw1
     
     # now the stochastic part
     NB0, MB0, NP0 = params['NB0'], params['MB0'], params['NP0']
     avir, sv = params['avir'], params['sv']
 
-    bstoch = stoch_term(k1_p, mu1_p, b1, f, avir, sv, MB0, NP0) * pdw[:,0] + \
-             stoch_term(k2_p, mu2_p, b1, f, avir, sv, MB0, NP0) * pdw[:,1] + \
-             stoch_term(k3_p, mu3_p, b1, f, avir, sv, MB0, NP0) * pdw[:,2]
+    bstoch = stoch_term(k1_p, mu1_p, b1, f, avir, sv, MB0, NP0) * pdw1 + \
+             stoch_term(k2_p, mu2_p, b1, f, avir, sv, MB0, NP0) * pdw2 + \
+             stoch_term(k3_p, mu3_p, b1, f, avir, sv, MB0, NP0) * pdw3
     bstoch = bstoch * 1/nbar
     bstoch = bstoch + NB0/nbar**2
 
@@ -58,22 +57,28 @@ def stoch_term(ki, mui, b1, f, avir, sv, MB0, NP0):
     t = t * w_B_infty(lambda2, avir, sv)
     return t
 
-def bispectrum_scoccimarro_proj(tri, emu, comet_params, ell=[0, 2], nbar=1.0, **kwargs):
+def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[0, 2], nbar=1.0, **kwargs):
     nmu = kwargs.pop('nmu', 20)
     nphi = kwargs.pop('nphi', 20)
     mus, w_mu = np.polynomial.legendre.leggauss(nmu)
     phis = np.linspace(0, 2*np.pi, nphi, endpoint=False)
     w_phi = 2 * np.pi / nphi
     mu, phi = np.meshgrid(mus, phis, indexing='ij')
-    m1_grid = mu[None, :, :] # shape (1, nmu, nphi)
-    mu12 = get_dot_cosine(tri[:, 0], tri[:, 1], tri[:, 2])[:, None, None] # shape (ntri, 1, 1)
+    mu1_grid = mu 
+
+    k1, k2, k3 = k1[:, None, None], k2[:, None, None], k3[:, None, None] # shape (ntri, 1, 1)
+    mu1_grid = mu1_grid[None, :, :] # shape (1, nmu, nphi)
+    phi_grid = phi[None, :, :] # shape (1, nmu, nphi)
+
+    mu12 = get_dot_cosine(k1, k2, k3)
     # ensure mu12 is in the range [-1, 1] to avoid numerical issues with sqrt
     mu12 = np.clip(mu12, -1, 1)
-    mu2_grid = mu12 * m1_grid + np.sqrt(1 - mu12**2) * np.sqrt(1 - m1_grid**2) * np.cos(phi)[None, :, :]
-    bfull = bispectrum_vdg(tri, m1_grid, mu2_grid, emu, comet_params, nbar=nbar, **kwargs) # shape (ntri, nmu, nphi)
+    mu2_grid = mu12 * mu1_grid + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1_grid**2) * np.cos(phi_grid)
+    # reshape everything to be (ntri, nmu, nphi)
+    bfull = bispectrum_vdg(k1, k2, k3, mu1_grid, mu2_grid, emu, comet_params, nbar=nbar, **kwargs) # shape (ntri, nmu, nphi)
     res = {}
     for ll in ell:
-        lell = legendre(ll)(m1_grid) # shape (1, nmu, nphi)
+        lell = legendre(ll)(mu1_grid) # shape (1, nmu, nphi)
         integral = np.sum(bfull * lell * w_mu[None, :, None] * w_phi, axis=(1, 2)) # shape (ntri,)
         bell = (2*ll + 1) * integral / (4 * np.pi)
         res[f'ell{ll}'] = bell
