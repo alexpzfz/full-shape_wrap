@@ -4,7 +4,7 @@ from observables import Observable, PowerSpectrumMultipoles
 class Likelihood:
     """Base class for likelihoods"""
     def __init__(self, observable, emu, params, am_params=None,
-                 am_from_comet=False):
+                 am_from_comet=False, conditional_prior=None):
         self.observable = observable
         self.icov = np.linalg.inv(observable.cov)
         self.nmocks_cov = observable.nmocks_cov
@@ -21,7 +21,10 @@ class Likelihood:
         
         if self.nmocks_cov is not None:
             self._rescale_covariance(mode='Hartlap')
- 
+        
+        self.conditional_prior = None
+        if conditional_prior is not None:
+            self.add_conditional_prior(conditional_prior)
 
         self.do_am = False
         self.am_params = am_params
@@ -69,6 +72,14 @@ class Likelihood:
                 if am_from_comet:
                     self.get_chi2 = self._get_chi2_am_from_comet
 
+        if self.conditional_prior is not None:
+            old_get_chi2 = self.get_chi2
+            def get_chi2_with_prior(params):
+                if not self.conditional_prior(params):
+                    return np.inf  # Return infinite chi2 if prior condition is not satisfied
+                return old_get_chi2(params)
+            self.get_chi2 = get_chi2_with_prior
+        
         # if self.params.fixed_cosmo:
         #     print("All cosmological parameters are fixed. Likelihood will only depend on nuisance parameters.")
         #     self.pell_func = emu.Pell_fixed_cosmo_boost
@@ -143,3 +154,15 @@ class Likelihood:
             m_vec *= bx
             design_mat[:, i] = m_vec
         return design_mat
+
+    def add_conditional_prior(self, conditional_prior):
+        """Add a conditional prior to the likelihood. The conditional_prior should be a function that takes the full parameter vector
+          and returns a boolean indicating whether the parameters satisfy the prior condition or not."""
+        if self.add_conditional_prior is None:
+            self.conditional_prior = conditional_prior
+        else:
+            old_prior = self.conditional_prior
+            def combined_prior(params):
+                return old_prior(params) and conditional_prior(params)
+            self.conditional_prior = combined_prior
+            
