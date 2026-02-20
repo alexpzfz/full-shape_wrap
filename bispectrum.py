@@ -63,25 +63,23 @@ def stoch_term(ki, mui, b1, f, avir, sv, MB0, NP0):
 def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[0, 2], nbar=1.0, **kwargs):
     nmu = kwargs.pop('nmu', 20)
     nphi = kwargs.pop('nphi', 20)
-    mus, w_mu = np.polynomial.legendre.leggauss(nmu)
-    phis = np.linspace(0, 2*np.pi, nphi, endpoint=False)
+    mu, w_mu = np.polynomial.legendre.leggauss(nmu)
+    phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)
     w_phi = 2 * np.pi / nphi
-    mu, phi = np.meshgrid(mus, phis, indexing='ij')
-    mu1_grid = mu 
+    mu1 = mu[None, :, None] # shape (1, nmu, 1)
+    phi = phi[None, None, :] # shape (1, 1, nphi)
 
     k1, k2, k3 = k1[:, None, None], k2[:, None, None], k3[:, None, None] # shape (ntri, 1, 1)
-    mu1_grid = mu1_grid[None, :, :] # shape (1, nmu, nphi)
-    phi_grid = phi[None, :, :] # shape (1, nmu, nphi)
 
     mu12 = get_dot_cosine(k1, k2, k3)
     # ensure mu12 is in the range [-1, 1] to avoid numerical issues with sqrt
     mu12 = np.clip(mu12, -1, 1)
-    mu2_grid = mu12 * mu1_grid + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1_grid**2) * np.cos(phi_grid)
+    mu2_grid = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi)
     # reshape everything to be (ntri, nmu, nphi)
-    bfull = bispectrum_vdg(k1, k2, k3, mu1_grid, mu2_grid, emu, comet_params, nbar=nbar, **kwargs) # shape (ntri, nmu, nphi)
+    bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2_grid, emu, comet_params, nbar=nbar, **kwargs) # shape (ntri, nmu, nphi)
     res = {}
     for ll in ell:
-        lell = legendre(ll)(mu1_grid) # shape (1, nmu, nphi)
+        lell = legendre(ll)(mu1) # shape (1, nmu, 1)
         integral = np.sum(bfull * lell * w_mu[None, :, None] * w_phi, axis=(1, 2)) # shape (ntri,)
         bell = (2*ll + 1) * integral / (4 * np.pi)
         res[f'ell{ll}'] = bell
