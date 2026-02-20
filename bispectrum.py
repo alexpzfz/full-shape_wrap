@@ -101,53 +101,48 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[0, 2], nbar=
     return res
 
 
-# def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=['000'], nbar=1.0, **kwargs):
-#     # k1k2 must be of shape (n, 2) where n is the number of triangles, and the two columns are k1 and k2. We will reconstruct k3 using the triangle condition.
-#     nmu1 = kwargs.pop('nmu1', 20)
-#     nmu2 = kwargs.pop('nmu2', 20)
-#     nphi = kwargs.pop('nphi', 20)
-#     mu1, w_mu1 = np.polynomial.legendre.leggauss(nmu1)
-#     mu2, w_mu2 = np.polynomial.legendre.leggauss(nmu2)
-#     phis = np.linspace(0, 2*np.pi, nphi, endpoint=False)
-#     w_phi = 2 * np.pi / nphi
-#     mu1_grid, mu2_grid, phi_grid = np.meshgrid(mu1, mu2, phis, indexing='ij')
-#     mu1_grid = mu1_grid[None, :, :, :] # shape (1, nmu1, nmu2, nphi)
-#     mu2_grid = mu2_grid[None, :, :, :] # shape (1, nmu1, nmu2, nphi)
-#     phi_grid = phi_grid[None, :, :, :] # shape (1, nmu1, nmu2, nphi)
-#     # \vec{k1} = (k1sin(theta1), 0, k1cos(theta1))
-#     # \vec{k2} = (k2sin(theta2)cos(phi), k2sin(theta2)sin(phi), k2cos(theta2))
-#     k1 = k1[:, None, None, None] # shape (n, 1, 1, 1)
-#     k2 = k2[:, None, None, None] # shape (n, 1, 1, 1)
-#     # reconstruc k3 from the triangle condition
-#     # mu12 = dot(k1, k2) / (|k1| |k2|)
-#     mu12 = np.sqrt(1 - mu1_grid**2) * np.sqrt(1 - mu2_grid**2) * np.cos(phi_grid) +  mu1_grid * mu2_grid # shape (1, nmu1, nmu2, nphi)
-#     mu12 = np.clip(mu12, -1, 1) # ensure mu12 is in the range [-1, 1] to avoid numerical issues with sqrt
-#     mu12 = np.where(mu12==0.0, 1e-10, mu12) # avoid exact zeros to prevent numerical issues
+def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=['000'], nbar=1.0, **kwargs):
+    # k1k2 must be of shape (n, 2) where n is the number of triangles, and the two columns are k1 and k2. We will reconstruct k3 using the triangle condition.
+    # let's use Scoccimarro coordinate system!!
+    n = k1.shape[0]
+    nmu1 = kwargs.pop('nmu1', 20) # cos(\omega)
+    nmu12 = kwargs.pop('nmu12', 20) # cos(\theta_{12})
+    nphi = kwargs.pop('nphi', 20) # \phi
+    mu1, w_mu1 = np.polynomial.legendre.leggauss(nmu1)
+    mu12, w_mu12 = np.polynomial.legendre.leggauss(nmu12)
+    phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)
+    w_phi = 2 * np.pi / nphi
+    mu1 = mu1[None, :, None, None] # shape (1, nmu1, 1, 1)
+    mu12 = mu12[None, None, :, None] # shape (1, 1, nmu12, 1)
+    phi = phi[None, None, None, :] # shape (1, 1, 1, nphi)
 
-#     k3sqr = k1**2 + k2**2 - 2 * k1 * k2 * mu12 # shape (n, nmu1, nmu2, nphi)
-#     k3sqr = np.where(k3sqr > 0, k3sqr, 0) # ensure k3^2 is non-negative to avoid numerical issues with sqrt
-#     k3 = np.sqrt(k3sqr) # shape (n, nmu1, nmu2, nphi)
-#     k3 = np.where(k3 > 0, k3, 1e-10) # avoid exact zeros to prevent numerical issues
+    k1, k2 = k1[:, None, None, None], k2[:, None, None, None] # shape (n, 1, 1, 1)
+    
+    # get k3 using the triangle condition
+    k3 = np.sqrt(k1**2 + k2**2 + 2 * k1 * k2 * mu12) # shape (n, 1, nmu12, 1)
+    # get mu2 using the Scoccimarro coordinate system
+    mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi) # shape (n, nmu1, nmu12, nphi)
+    
 
-#     bfull = bispectrum_vdg(k1, k2, k3, mu1_grid, mu2_grid, emu, comet_params, nbar=nbar, **kwargs) # shape (n, nmu1, nmu2, nphi)
-#     res = {}
-#     for ll in ell:
-#         l1, l2, L = map(int, ll)
-#         integrand = 0
-#         # need a single m
-#         for m in range(-min(l1, l2), min(l1, l2)+1):
-#             w3j = wigner(l1, l2, L, m)
-#             if w3j is None or w3j == 0:
-#                 continue
-#             y1 = sph_harm(l1, m, mu1_grid, 0)
-#             y2 = sph_harm(l2, -m, mu2_grid, phi_grid)
-#             integrand += w3j * y1 * y2
-#         integrand = integrand * bfull * w_mu1[None, :, None, None] * w_mu2[None, None, :, None] * w_phi
-#         integral = np.sum(integrand, axis=(1, 2, 3))
-#         prefactor = (2*l1 + 1) * (2*l2 + 1) * (2*L + 1) / (4 * np.pi)
-#         res[f'{ll}'] = prefactor * integral
+    bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, nbar=nbar, **kwargs) # shape (n, nmu1, nmu2, nphi)
+    # res = {}
+    # for ll in ell:
+    #     l1, l2, L = map(int, ll)
+    #     integrand = 0
+    #     # need a single m
+    #     for m in range(-min(l1, l2), min(l1, l2)+1):
+    #         w3j = wigner(l1, l2, L, m)
+    #         if w3j is None or w3j == 0:
+    #             continue
+    #         y1 = sph_harm(l1, m, mu1, 0)
+    #         y2 = sph_harm(l2, -m, mu2, phi)
+    #         integrand += w3j * y1 * y2
+    #     integrand = integrand * bfull * w_mu1[None, :, None, None] * w_mu12[None, None, :, None] * w_phi
+    #     integral = np.sum(integrand, axis=(1, 2, 3))
+    #     prefactor = (2*l1 + 1) * (2*l2 + 1) * (2*L + 1) / (4 * np.pi)
+    #     res[f'{ll}'] = prefactor * integral
 
-#     return res
+    return bfull
 
 
 def kernel_Z1(mu, b1, f):
