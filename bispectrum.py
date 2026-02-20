@@ -3,41 +3,23 @@ from scipy.special import legendre
 #from sympy.physics.wigner import wigner_3j
 
 
-def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, nbar=1.0,
-                    wmat=None, kwin=None, kwout=None, **kwargs):
-    # k1, k2, k3 are either arrays of any shape or floats
-    if wmat is not None:
-        assert kwin is not None and kwout is not None, "kwin and kwout must be provided if wmat is provided"
-        k_all = np.concatenate([np.ravel(k1), np.ravel(k2), np.ravel(k3)])
-        kunique = np.unique(k_all)
-        # find the indices of kunique that correspond to kwout
-        idx_out = np.searchsorted(kunique, kwout)
-        # filter wmat to only include the rows that correspond to kwout
-        wmat = wmat[idx_out, :]
-        pdw = emu.Pdw(kwin, comet_params, **kwargs)
-        pdw = wmat @ pdw
-        pdw1 = pdw[np.searchsorted(kwin, k1)]
-        pdw2 = pdw[np.searchsorted(kwin, k2)]
-        pdw3 = pdw[np.searchsorted(kwin, k3)]
-    else:
-        k_all = np.concatenate([np.ravel(k1), np.ravel(k2), np.ravel(k3)])
-        kunique = np.unique(k_all)
-        pdw = emu.Pdw(kunique, comet_params, **kwargs)
-        pdw1 = pdw[np.searchsorted(kunique, k1)]
-        pdw2 = pdw[np.searchsorted(kunique, k2)]
-        pdw3 = pdw[np.searchsorted(kunique, k3)]
-
+def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, nbar=1.0, **kwargs):
     params = emu.params
     b1, b2, g2, f = params['b1'], params['b2'], params['g2'], params['f']
-    # handle division by zero
-    mu3 = np.where(k3 > 0, - (mu1 * k1 + mu2 * k2) / k3, -1.0)
-
     # Apply AP effect
     qpar, qperp = params['q_lo'], params['q_tr']
     qiso6 = qpar**2 * qperp**4
+    mu3 = np.where(k3 > 0, - (mu1 * k1 + mu2 * k2) / k3, -1.0)
     k1_p, mu1_p = apply_ap(k1, mu1, qpar, qperp) 
     k2_p, mu2_p = apply_ap(k2, mu2, qpar, qperp)
     k3_p, mu3_p = apply_ap(k3, mu3, qpar, qperp)
+    # k1, k2, k3 are either arrays of any shape or floats
+    k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
+    kunique = np.unique(k_all)
+    pdw = emu.Pdw(kunique, comet_params, mu=0.6, **kwargs)
+    pdw1 = pdw[np.searchsorted(kunique, k1_p)]
+    pdw2 = pdw[np.searchsorted(kunique, k2_p)]
+    pdw3 = pdw[np.searchsorted(kunique, k3_p)]
     
     # tree level first
     btree = tree_term(k1_p, k2_p, mu1_p, mu2_p, k3_p, mu3_p, b1, b2, g2, f) * pdw1 * pdw2 + \
