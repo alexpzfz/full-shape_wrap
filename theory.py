@@ -1,8 +1,6 @@
 from comet import comet
-from .params import Params
 import numpy as np
 from observables import PowerSpectrumMultipoles, BispectrumScoccimarroMultipoles, JointObservable
-from samplers import NautilusSampler
 from bispectrum import bispectrum_scoccimarro_proj
 
 class BaseModel:
@@ -10,22 +8,22 @@ class BaseModel:
     def __init__(self, **kwargs):
         pass
     
-    def _predict(self, observable, params):
+    def predict(self, observable, params, **kwargs):
         """Predict the observable given the parameters
            This method should return a 1D array of the same length as the data vector of the observable
         """
         if isinstance(observable, PowerSpectrumMultipoles):
-            return self.predict_power_spectrum_multipoles(observable, params)
+            return self.predict_power_spectrum_multipoles(observable, params, **kwargs)
         elif isinstance(observable, BispectrumScoccimarroMultipoles):
-            return self.predict_bispectrum_scoccimarro_multipoles(observable, params)
+            return self.predict_bispectrum_scoccimarro_multipoles(observable, params, **kwargs)
         elif isinstance(observable, JointObservable):
             pred_list = []
             for obs in observable.observables:
-                pred_list.append(self._predict(obs, params))
+                pred_list.append(self.predict(obs, params, **kwargs))
             return np.concatenate(pred_list)
         
 
-class COMET(BaseModel, comet):
+class COMET(comet, BaseModel):
     """COMET model for power spectrum and bispectrum"""
     # weird hack: wrapper is an emu instance itself
     def __init__(self, **kwargs):
@@ -34,8 +32,8 @@ class COMET(BaseModel, comet):
     def predict_power_spectrum_multipoles(self, observable, params, de_model):
         k = observable.k if observable.kwin is None else observable.kwin
         ell = observable.ell if observable.ellwin is None else observable.ellwin
-        pell = self.Pell(k, ell, params, de_model=de_model)
-        pell = np.concatenate([pell[f'ell={ell}'] for ell in observable.ell])
+        pell = self.Pell(k, params, ell, de_model=de_model)
+        pell = np.concatenate([pell[f'ell{ell}'] for ell in observable.ell])
         if observable.xwin is not None:
             pell = observable.wmat @ pell
         return pell

@@ -71,13 +71,13 @@ class Likelihood:
             self.am_inv_cov = np.diag([1/self.params.parameters[am_param].prior[1]**2 for am_param in self.am_params])
             self.am_det_cov = np.prod([self.params.parameters[am_param].prior[1]**2 for am_param in self.am_params])
             
-        if observable.__class__ == PowerSpectrumMultipoles:
-            self.get_chi2 = self._get_chi2_powerspectrum
-            if self.do_am:
-                #self.get_chi2 = self._get_chi2_am_from_comet
-                self.get_chi2 = self._get_chi2_powerspectrum_am
-                if am_from_comet:
-                    self.get_chi2 = self._get_chi2_am_from_comet
+        # if observable.__class__ == PowerSpectrumMultipoles:
+        #     self.get_chi2 = self._get_chi2_powerspectrum
+        #     if self.do_am:
+        #         #self.get_chi2 = self._get_chi2_am_from_comet
+        #         self.get_chi2 = self._get_chi2_powerspectrum_am
+        #         if am_from_comet:
+        #             self.get_chi2 = self._get_chi2_am_from_comet
 
         if self.conditional_prior is not None:
             old_get_chi2 = self.get_chi2
@@ -131,6 +131,22 @@ class Likelihood:
         comet_params = self.params.get_comet_dict(params)
         chi2 = self.emu.chi2(obs_id='pk', params=comet_params, kmax=self.observable._kmax, de_model=self.de_model, AM_priors=self.am_priors)
         chi2 = float(chi2)  # Ensure chi2 is a scalar float, not a 0-dim array
+        return chi2
+    
+    def get_chi2(self, params):
+        comet_params = self.params.get_comet_dict(params)
+        pred = self.emu.predict(self.observable, comet_params, de_model=self.de_model)
+        delta = self.y - pred
+        if not self.do_am:
+            chi2 = delta.T @ self.icov @ delta
+        else:
+            dm = self.get_design_matrix_ps(params)
+            if not self.am_sample:
+                chi2 = self.marg_chi2(delta, self.icov, self.am_params_0, self.am_inv_cov, self.am_det_cov, dm)
+            else:
+                chi2, cond_mean, cond_cov = self.marg_chi2(delta, self.icov, self.am_params_0, self.am_inv_cov,
+                                                            self.am_det_cov, dm, return_cond_mean_cov=True)
+                self.sample_cond_am(params, cond_mean, cond_cov, mode=self.am_sample_mode)
         return chi2
 
     def get_loglike(self, params):
