@@ -170,17 +170,30 @@ class BispectrumScoccimarroMultipoles(Observable):
         
 
 class JointObservable(Observable):
-    def __init__(self, obs1, obs2, cov=None):
+    def __init__(self, obs1, obs2, cov=None, cov_Mpc_units=False):
         assert obs1.cosmo_fid == obs2.cosmo_fid, "Observables must have the same fiducial cosmology"
         self.obs1 = obs1
         self.obs2 = obs2
         x = obs1.x + obs2.x
         y = obs1.y + obs2.y
+        self.h_fid = obs1.h_fid
+        hpower_dict = {'PowerSpectrumMultipoles': 3.0, 'BispectrumScoccimarroMultipoles': 6.0}
+
         if cov is None:
             print("No covariance matrix provided for joint observable, constructing block diagonal covariance matrix")
             cov = self.get_block_cov(obs1.cov, obs2.cov)
         else:
             assert cov.shape == (obs1.n_data + obs2.n_data, obs1.n_data + obs2.n_data), "Covariance matrix has wrong shape" 
+            if not cov_Mpc_units:
+                hpower1 = hpower_dict.get(type(obs1).__name__, None)
+                hpower2 = hpower_dict.get(type(obs2).__name__, None)
+                hfact1 = self.h_fid**hpower1
+                hfact2 = self.h_fid**hpower2
+                cov[:obs1.n_data, :obs1.n_data] /= hfact1**2
+                cov[obs1.n_data:, obs1.n_data:] /= hfact2**2
+                cov[:obs1.n_data, obs1.n_data:] /= hfact1 * hfact2
+                cov[obs1.n_data:, :obs1.n_data] /= hfact1 * hfact2
+                
         super().__init__(x, y, cov=cov, nbar=obs1.nbar, cosmo_fid=obs1.cosmo_fid)
 
     def get_block_cov(self, cov1, cov2):
