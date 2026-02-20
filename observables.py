@@ -2,7 +2,8 @@ import numpy as np
 
 class Observable:
     """Base class for observables"""
-    def __init__(self, x, y, cov=None, nbar=None, cosmo_fid=None, xmin=None, xmax=None, nmocks_cov=None):
+    def __init__(self, x, y, cov=None, nbar=None, cosmo_fid=None, wmat=None, xwin=None,
+                 xmin=None, xmax=None, xwinmin=None, xwinmax=None, nmocks_cov=None):
         self.x = x.copy()
         self.y = y.copy()
         if not isinstance(self.y, list):
@@ -15,14 +16,30 @@ class Observable:
         self.n_obs = len(self.y)
         self.nbar = nbar
         self.nmocks_cov = nmocks_cov
-        if xmin is not None or xmax is not None:
-            self._cut_scales(xmin, xmax)
+        self.wmat = wmat
+        self.xwin = xwin
+        self.nobswin = None
+        if wmat is not None:
+            assert self.xwin is not None, "xwin must be provided if wmat is provided"
+            if isinstance(self.xwin, float):
+                self.nobswin = self.n_obs
+                self.xwin = [self.xwin] * self.nobswin
+            else:
+                self.nobswin = len(self.xwin)
+            assert self.wmat.shape == (self.n_data, np.sum([len(xwini) for xwini in self.xwin])), "wmat has wrong shape"
 
-    def _cut_scales(self, xmin, xmax):
+        if xmin is not None or xmax is not None:
+            self._cut_scales(xmin, xmax, xwinmin, xwinmax)
+
+    def _cut_scales(self, xmin, xmax, xwinmin=None, xwinmax=None):
         if isinstance(xmin, float):
             xmin = [xmin] * self.n_obs
         if isinstance(xmax, float):
             xmax = [xmax] * self.n_obs
+        if xmin is None:
+            xmin = [-np.inf] * self.n_obs
+        if xmax is None:
+            xmax = [np.inf] * self.n_obs
         masks = []
         for i in range(self.n_obs):
             # depending on the shape of x[i]
@@ -36,7 +53,28 @@ class Observable:
         cov_mask = np.concatenate(masks)
         if self.cov is not None:
             self.cov = self.cov[np.ix_(cov_mask, cov_mask)]
-         
+        if self.wmat is not None:
+            self.wmat = self.wmat[cov_mask, :] # shape (n_data_cut, n_win)
+        if xwinmin is not None or xwinmax is not None:
+            if isinstance(xwinmin, float):
+                xwinmin = [xwinmin] * self.nobswin
+            if isinstance(xwinmax, float):
+                xwinmax = [xwinmax] * self.nobswin
+            if xwinmin is None:
+                xwinmin = [-np.inf] * self.nobswin
+            if xwinmax is None:
+                xwinmax = [np.inf] * self.nobswin
+            win_masks = []
+            for i in range(self.nobswin):
+                if self.xwin[i].ndim == 1:
+                    win_mask = (self.xwin[i] >= xwinmin[i]) & (self.xwin[i] <= xwinmax[i])
+                else:
+                    win_mask = np.all((self.xwin[i] >= xwinmin[i]) & (self.xwin[i] <= xwinmax[i]), axis=1)
+                self.xwin[i] = self.xwin[i][win_mask]
+                win_masks.append(win_mask)
+            wmat_mask = np.concatenate(win_masks)
+            self.wmat = self.wmat[:, wmat_mask]
+        
     def get_flatten(self):
         y = np.concatenate(self.y)
         return y
@@ -47,8 +85,10 @@ class Observable:
 
 class PowerSpectrumMultipoles(Observable):
     """Power spectrum multipoles"""
-    def __init__(self, k, Pell, cov=None, nbar=None, cosmo_fid=None, Mpc_units=False, kmin=None, kmax=None, nmocks_cov=None):
-        super().__init__(k, Pell, cov, nbar, cosmo_fid, xmin=kmin, xmax=kmax, nmocks_cov=nmocks_cov)
+    def __init__(self, k, Pell, cov=None, nbar=None, cosmo_fid=None, Mpc_units=False, kmin=None, kmax=None,
+                 wmat=None, kwin=None, kwinmin=None, kwinmax=None, nmocks_cov=None):
+        super().__init__(k, Pell, cov, nbar, cosmo_fid, xmin=kmin, xmax=kmax, nmocks_cov=nmocks_cov,
+                         wmat=wmat, xwin=kwin, xwinmin=kwinmin, xwinmax=kwinmax)
         # Internatlly, everything is done in Mpc units
         if not Mpc_units:
             assert getattr(self, 'h_fid') is not None, "h value is required to convert to Mpc units"
@@ -59,7 +99,9 @@ class PowerSpectrumMultipoles(Observable):
                 self.cov = self.cov / self.h_fid**6
         self.k = self.x
         self.Pell = self.y
+        self.kwin = self.xwin
         self.ell = [2*i for i in range(self.n_obs)]
+        self.ellwin = [2*i for i in range(self.nobswin)] if self.nobswin is not None else None
 
         # for the moment, store unformated data to use for comet AM chi2 function
         self._k = k * self.h_fid if not Mpc_units else k
