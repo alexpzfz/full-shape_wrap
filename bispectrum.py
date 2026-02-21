@@ -1,7 +1,6 @@
 import numpy as np
-from scipy.special import legendre
-#from sympy.physics.wigner import wigner_3j
-
+from scipy.special import legendre, factorial, lpmv
+from sympy.physics.wigner import wigner_3j
 
 def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, nbar=1.0, **kwargs):
     params = emu.params
@@ -82,9 +81,8 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[0, 2], nbar=
         res[f'ell{ll}'] = bell
     return res
 
-
+from time import time
 def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=['000'], nbar=1.0, **kwargs):
-    # k1k2 must be of shape (n, 2) where n is the number of triangles, and the two columns are k1 and k2. We will reconstruct k3 using the triangle condition.
     # let's use Scoccimarro coordinate system!!
     n = k1.shape[0]
     nmu1 = kwargs.pop('nmu1', 20) # cos(\omega)
@@ -95,7 +93,9 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=['000'], nbar=1.0, *
     phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)
     w_phi = 2 * np.pi / nphi
     mu1 = mu1[None, :, None, None] # shape (1, nmu1, 1, 1)
+    w_mu1 = w_mu1[None, :, None, None] # shape (1, nmu1, 1, 1)
     mu12 = mu12[None, None, :, None] # shape (1, 1, nmu12, 1)
+    w_mu12 = w_mu12[None, None, :, None] # shape (1, 1, nmu12, 1)
     phi = phi[None, None, None, :] # shape (1, 1, 1, nphi)
 
     k1, k2 = k1[:, None, None, None], k2[:, None, None, None] # shape (n, 1, 1, 1)
@@ -105,26 +105,66 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=['000'], nbar=1.0, *
     # get mu2 using the Scoccimarro coordinate system
     mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi) # shape (n, nmu1, nmu12, nphi)
     
-
     bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, nbar=nbar, **kwargs) # shape (n, nmu1, nmu2, nphi)
-    # res = {}
-    # for ll in ell:
-    #     l1, l2, L = map(int, ll)
-    #     integrand = 0
-    #     # need a single m
-    #     for m in range(-min(l1, l2), min(l1, l2)+1):
-    #         w3j = wigner(l1, l2, L, m)
-    #         if w3j is None or w3j == 0:
-    #             continue
-    #         y1 = sph_harm(l1, m, mu1, 0)
-    #         y2 = sph_harm(l2, -m, mu2, phi)
-    #         integrand += w3j * y1 * y2
-    #     integrand = integrand * bfull * w_mu1[None, :, None, None] * w_mu12[None, None, :, None] * w_phi
-    #     integral = np.sum(integrand, axis=(1, 2, 3))
-    #     prefactor = (2*l1 + 1) * (2*l2 + 1) * (2*L + 1) / (4 * np.pi)
-    #     res[f'{ll}'] = prefactor * integral
+    proj_ops = get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_phi, mu1, mu12, phi)
+    
+    # Reshape bfull to (n, nmu1 * nmu12 * nphi) for a blazing fast BLAS matrix-vector product
+    bfull_flat = bfull.reshape(n, -1)
+    res = {}
+    for ll in ell:
+        # l1, l2, L = map(int, ll)
+        # proj_operator = np.zeros(bfull.shape[1:]) # shape (nmu1, nmu12, nphi)
+        # # need a single m
+        # for M in range(-L, L+1):
+        #     w3j = wigner_3j(l1, l2, L, 0, -M, M)
+        #     if w3j == 0:
+        #         continue
+        #     y1 = sph_harm(l2, -M, mu12, 0)
+        #     y2 = sph_harm(L, M, mu1, phi)
+        #     proj_operator = proj_operator + w3j * y1 * y2
+        # proj_operator = (proj_operator * w_mu1 * w_mu12 * w_phi).squeeze() 
+        # integral = np.tensordot(bfull, proj_operator, axes=([1,2,3], [0,1,2]))
+        # prefactor = (2*l1 + 1) * (2*l2 + 1) * (2*L + 1) / (4 * np.pi)
+        # res[f'{ll}'] = prefactor * integral
+        # 2. Replaced tensordot with a much faster flattened dot product (@)
+        res[f'{ll}'] = bfull_flat @ proj_ops[f'{ll}']
 
-    return bfull
+    return res
+
+_PROJ_CACHE = {}
+
+def get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_phi, mu1, mu12, phi, cache=True):
+    """Fetches or computes the projection operator for a given grid configuration."""
+    cache_key = (nmu1, nmu12, nphi, tuple(ell))
+    
+    if cache_key in _PROJ_CACHE and cache:
+        return _PROJ_CACHE[cache_key]
+        
+    res_ops = {}
+    for ll in ell:
+        l1, l2, L = map(int, ll)
+        proj_operator = np.zeros((1, nmu1, nmu12, nphi), dtype=complex) # Match broadcast shape
+        h = float(wigner_3j(l1, l2, L, 0, 0, 0).evalf())
+        if h == 0:
+            continue
+
+        for M in range(-L, L+1):
+            w3j = float(wigner_3j(l1, l2, L, 0, -M, M).evalf()) # Ensure it's a float, not a sympy Rational
+            if w3j == 0:
+                continue
+            y1 = sph_harm(l2, -M, mu12, 0)
+            y2 = sph_harm(L, M, mu1, -phi)
+            proj_operator = proj_operator + w3j * y1 * y2
+            
+        # Apply integration weights here to save operations later
+        proj_operator = (proj_operator * w_mu1 * w_mu12 * w_phi).squeeze()
+        
+        # Flatten the operator for faster dot products later
+        prefactor = h *(2*l1 + 1) * (2*l2 + 1) * (2*L + 1) / (8 * np.pi)
+        res_ops[f'{ll}'] = np.real(proj_operator.ravel() * prefactor)
+        
+    _PROJ_CACHE[cache_key] = res_ops
+    return res_ops
 
 
 def kernel_Z1(mu, b1, f):
@@ -165,7 +205,6 @@ def w_12_infty_0(lamb2, avir, sv):
     return 1./(1 - lamb2 * avir**2)**(3./2.) * \
             np.exp(lamb2 * sv**2/(1 - lamb2 * avir**2)) 
 
-
 def apply_ap(k, mu, qpar, qperp):
     # calculate real coordinates
     F = qpar / qperp
@@ -173,45 +212,7 @@ def apply_ap(k, mu, qpar, qperp):
     mu_p = mu / F / np.sqrt(1 + mu**2 * (1/F**2 - 1))
     return k_p, mu_p
 
-
-
 def sph_harm(l, m, costheta, phi):
-    # m must be in the range [-l, l]
-    assert abs(m) <= l, "m must be in the range [-l, l]"
-    norm = np.sqrt(4 * np.pi / (2 * l + 1))
-    if l == 0 and m == 0:
-        return norm * 1/2 * np.sqrt(1/np.pi)
-    elif l == 1 and m == 0:
-        return norm * np.sqrt(3/(4*np.pi)) * costheta
-    elif l == 1 and m == 1:
-        return -norm * np.sqrt(3/(8*np.pi)) * np.exp(1j * phi) * np.sqrt(1 - costheta**2)
-    elif l == 1 and m == -1:
-        return norm * np.sqrt(3/(8*np.pi)) * np.exp(-1j * phi) * np.sqrt(1 - costheta**2)
-    elif l == 2 and m == 0:
-        return norm * np.sqrt(5/(16*np.pi)) * (3*costheta**2 - 1)
-    elif l == 2 and m == 1:
-        return -norm * np.sqrt(15/(8*np.pi)) * np.exp(1j * phi) * costheta * np.sqrt(1 - costheta**2)
-    elif l == 2 and m == -1:
-        return norm * np.sqrt(15/(8*np.pi)) * np.exp(-1j * phi) * costheta * np.sqrt(1 - costheta**2)
-    elif l == 2 and m == 2:
-        return norm * np.sqrt(15/(32*np.pi)) * np.exp(2j * phi) * (1 - costheta**2)
-    elif l == 2 and m == -2:
-        return norm * np.sqrt(15/(32*np.pi)) * np.exp(-2j * phi) * (1 - costheta**2)
-    else:
-        raise NotImplementedError("Only implemented for l=0,1,2 and corresponding m")
-
-def wigner(l1, l2, L, m):
-    # (l1 l2 L)
-    # (m -m 0)
-    if L == 0:
-        res = (-1)**(l1 - m) / np.sqrt(2 * l1 + 1) if l1 == l2 else 0
-    elif L == 2:
-        if l1 == l2:
-            res = (-1)**(l1 - m) * np.sqrt((2*l1 + 1) * (l1*(l1+1) - 3*m**2)) / np.sqrt(6 * (l1-1)*l1*(l1+1)*(l1+2))
-        elif abs(l1 - l2) == 2:
-            res = (-1)**(min(l1, l2) - m) * np.sqrt((5*(2*min(l1, l2)+1)*(max(l1, l2)-min(l1, l2))*(max(l1, l2)+min(l1, l2)+1)) / (6 * (max(l1, l2)-min(l1, l2)+3)*(max(l1, l2)-min(l1, l2)+4)))
-        else:
-            res = 0
-    else:
-        raise NotImplementedError("Only implemented for L=0 and L=2")
-    return res
+    norm = np.sqrt(factorial(l - abs(m)) / factorial(l + abs(m)))
+    norm = norm * (-1)**(m - abs(m)/2)
+    return norm * lpmv(abs(m), l, costheta) * np.exp(1j * m * phi)
