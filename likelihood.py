@@ -107,34 +107,34 @@ class Likelihood:
         #self.icov *= factor
         self.cov /= factor
 
-    def _get_chi2_powerspectrum(self, params):
-        comet_params = self.params.get_comet_dict(params)
-        pred = self.emu.Pell(self.x, params=comet_params, ell=self.observable.ell, de_model=self.de_model)
-        y_model = np.concatenate([pred[f'ell{l}'] for l in self.observable.ell])
-        delta = self.y - y_model
-        chi2 = np.dot(delta, np.dot(self.icov, delta))
-        return chi2
+    # def _get_chi2_powerspectrum(self, params):
+    #     comet_params = self.params.get_comet_dict(params)
+    #     pred = self.emu.Pell(self.x, params=comet_params, ell=self.observable.ell, de_model=self.de_model)
+    #     y_model = np.concatenate([pred[f'ell{l}'] for l in self.observable.ell])
+    #     delta = self.y - y_model
+    #     chi2 = np.dot(delta, np.dot(self.icov, delta))
+    #     return chi2
 
-    def _get_chi2_powerspectrum_am(self, params):
-        comet_params = self.params.get_comet_dict(params)
-        pred = self.emu.Pell(self.x, params=comet_params, ell=self.observable.ell, de_model=self.de_model)
-        y_model = np.concatenate([pred[f'ell{l}'] for l in self.observable.ell])
-        delta = self.y - y_model
-        dm = self.get_design_matrix_ps(params)
-        if not self.am_sample:
-            chi2 = self.marg_chi2(delta, self.icov, self.am_params_0, self.am_inv_cov, self.am_det_cov, dm)
-        else:
-            chi2, cond_mean, cond_cov = self.marg_chi2(delta, self.icov, self.am_params_0, self.am_inv_cov,
-                                                        self.am_det_cov, dm, return_cond_mean_cov=True)
-            self.sample_cond_am(params, cond_mean, cond_cov, mode=self.am_sample_mode) 
+    # def _get_chi2_powerspectrum_am(self, params):
+    #     comet_params = self.params.get_comet_dict(params)
+    #     pred = self.emu.Pell(self.x, params=comet_params, ell=self.observable.ell, de_model=self.de_model)
+    #     y_model = np.concatenate([pred[f'ell{l}'] for l in self.observable.ell])
+    #     delta = self.y - y_model
+    #     dm = self.get_design_matrix_ps(params)
+    #     if not self.am_sample:
+    #         chi2 = self.marg_chi2(delta, self.icov, self.am_params_0, self.am_inv_cov, self.am_det_cov, dm)
+    #     else:
+    #         chi2, cond_mean, cond_cov = self.marg_chi2(delta, self.icov, self.am_params_0, self.am_inv_cov,
+    #                                                     self.am_det_cov, dm, return_cond_mean_cov=True)
+    #         self.sample_cond_am(params, cond_mean, cond_cov, mode=self.am_sample_mode) 
 
-        return chi2
+    #     return chi2
 
-    def _get_chi2_am_from_comet(self, params):
-        comet_params = self.params.get_comet_dict(params)
-        chi2 = self.emu.chi2(obs_id='pk', params=comet_params, kmax=self.observable._kmax, de_model=self.de_model, AM_priors=self.am_priors)
-        chi2 = float(chi2)  # Ensure chi2 is a scalar float, not a 0-dim array
-        return chi2
+    # def _get_chi2_am_from_comet(self, params):
+    #     comet_params = self.params.get_comet_dict(params)
+    #     chi2 = self.emu.chi2(obs_id='pk', params=comet_params, kmax=self.observable._kmax, de_model=self.de_model, AM_priors=self.am_priors)
+    #     chi2 = float(chi2)  # Ensure chi2 is a scalar float, not a 0-dim array
+    #     return chi2
     
     def get_chi2(self, params):
         comet_params = self.params.get_comet_dict(params)
@@ -178,8 +178,8 @@ class Likelihood:
             # cond_mean = lamb_inv @ (b + pcov_inv @ p0_vec)
             # cond_cov = lamb_inv
             cond_mean = get_Cib(lamb_chol, b + pcov_inv @ p0_vec)
-            #cond_cov = get_inv_chol(lamb_chol)
-            return chi2, cond_mean, lamb_chol
+            lamb_inv = get_inv_chol(lamb_chol)
+            return chi2, cond_mean, lamb_inv
         return chi2
     
     def get_design_matrix_ps(self, params):
@@ -194,10 +194,15 @@ class Likelihood:
                 factor = 1.0
             diag_to_marg = self.emu.diagrams_to_marg[param_base]
             bx = self.emu._get_bias_coeff_for_AM(diag_to_marg)
-            bx *= factor
+            
+            bx = bx * factor# Apply reparametrization factor if needed
             px_ell = self.emu.PX_ell(self.x, comet_params, self.observable.ell, diag_to_marg, de_model=self.de_model)
-            m_vec = np.concatenate([px_ell[f'ell{l}'] for l in self.observable.ell])
-            m_vec *= bx
+            nx = px_ell[f'ell0'].ndim
+            if nx == 1:
+                m_list = [bx * px_ell[f'ell{l}'] for l in self.observable.ell]
+            elif nx > 1:
+                m_list = [np.sum(bx * px_ell[f'ell{l}'], axis=1) for l in self.observable.ell] 
+            m_vec = np.concatenate(m_list)
             design_mat[:, i] = m_vec
         return design_mat
 
@@ -212,11 +217,11 @@ class Likelihood:
                 return old_prior(params) and conditional_prior(params)
             self.conditional_prior = combined_prior
 
-    def sample_cond_am(self, params, mean, cov_chol, mode='sample'):
+    def sample_cond_am(self, params, mean, cov, mode='sample'):
         if len(self.am_params) == 1:
             am_param = self.am_params[0]
             if mode == 'sample':
-                value = np.random.normal(mean, np.sqrt(cov_chol[0, 0]))
+                value = np.random.normal(mean, np.sqrt(cov))  # Sample from the conditional distribution
             else:
                 value = mean  # MAP estimate
             params[am_param] = value
@@ -225,6 +230,7 @@ class Likelihood:
                 # Sample from a normal distribution with mean 0 and cov 1.
                 z = np.random.normal(size=len(self.am_params))
                 # Transform to the desired mean and covariance using the Cholesky decomposition.
+                cov_chol = np.linalg.cholesky(cov)
                 value = mean + cov_chol @ z    
             else:
                 value = mean  # MAP estimate
