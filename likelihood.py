@@ -8,6 +8,7 @@ class Likelihood:
                  am_sample = True, am_from_comet=False, conditional_prior=None):
         self.observable = observable
         self.icov = np.linalg.inv(observable.cov)
+        self.lcov = np.linalg.cholesky(observable.cov)
         self.nmocks_cov = observable.nmocks_cov
         self.emu = emu
         self.params = params
@@ -138,13 +139,14 @@ class Likelihood:
         pred = self.emu.predict(self.observable, comet_params, de_model=self.de_model)
         delta = self.y - pred
         if not self.do_am:
-            chi2 = delta.T @ self.icov @ delta
+            # chi2 = delta.T @ self.icov @ delta
+            chi2 = get_bCib(self.lcov, delta)
         else:
             dm = self.get_design_matrix_ps(params)
             if not self.am_sample:
-                chi2 = self.marg_chi2(delta, self.icov, self.am_params_0, self.am_inv_cov, self.am_det_cov, dm)
+                chi2 = self.marg_chi2(delta, self.lcov, self.am_params_0, self.am_inv_cov, self.am_det_cov, dm)
             else:
-                chi2, cond_mean, cond_cov = self.marg_chi2(delta, self.icov, self.am_params_0, self.am_inv_cov,
+                chi2, cond_mean, cond_cov = self.marg_chi2(delta, self.lcov, self.am_params_0, self.am_inv_cov,
                                                             self.am_det_cov, dm, return_cond_mean_cov=True)
                 self.sample_cond_am(params, cond_mean, cond_cov, mode=self.am_sample_mode)
         return chi2
@@ -155,21 +157,27 @@ class Likelihood:
         return loglike
 
     @staticmethod
-    def marg_chi2(diff, dcov_inv, p0_vec, pcov_inv, detpcov, design_mat,
+    def marg_chi2(diff, dcov_chol, p0_vec, pcov_inv, detpcov, design_mat,
                   return_cond_mean_cov=False):
         res = diff - design_mat @ p0_vec
-        lamb = design_mat.T @ dcov_inv @ design_mat + pcov_inv
-        lamb_inv = np.linalg.inv(lamb) if lamb.shape[0] > 1 else 1/lamb
-        detlamb = np.linalg.det(lamb) if lamb.shape[0] > 1 else lamb
-        b = design_mat.T @ dcov_inv @ res
-        chi2 =  res.T @ dcov_inv @ res
-        chi2 = chi2  - b.T @ lamb_inv @ b
+        #lamb = design_mat.T @ dcov_inv @ design_mat + pcov_inv
+        lamb = get_bCib(dcov_chol, design_mat) + pcov_inv
+        lamb_chol = np.linalg.cholesky(lamb) 
+        # lamb_inv = np.linalg.inv(lamb) if lamb.shape[0] > 1 else 1/lamb
+        # detlamb = np.linalg.det(lamb) if lamb.shape[0] > 1 else lamb
+        # compute detlmab from the Cholesky decomposition
+        detlamb = np.prod(np.diag(lamb_chol))**2
+        b = design_mat.T @ get_Cib(dcov_chol, res)
+        chi2 =  get_bCib(dcov_chol, res)
+        chi2 = chi2  - get_bCib(lamb_chol, b)
         chi2 = chi2 + np.log(np.abs(detlamb)) + np.log(np.abs(detpcov))  # Include detpcov in log
         chi2 = chi2[0][0] if lamb.shape[0] == 1 else chi2  # If lamb is 1D, return scalar chi2 
         if return_cond_mean_cov:
-            cond_mean = lamb_inv @ (b + pcov_inv @ p0_vec)
-            cond_cov = lamb_inv
-            return chi2, cond_mean, cond_cov
+            # cond_mean = lamb_inv @ (b + pcov_inv @ p0_vec)
+            # cond_cov = lamb_inv
+            cond_mean = get_Cib(lamb_chol, b + pcov_inv @ p0_vec)
+            #cond_cov = get_inv_chol(lamb_chol)
+            return chi2, cond_mean, lamb_chol
         return chi2
     
     def get_design_matrix_ps(self, params):
@@ -202,18 +210,45 @@ class Likelihood:
                 return old_prior(params) and conditional_prior(params)
             self.conditional_prior = combined_prior
 
-    def sample_cond_am(self, params, mean, cov, mode='sample'):
+    def sample_cond_am(self, params, mean, cov_chol, mode='sample'):
         if len(self.am_params) == 1:
             am_param = self.am_params[0]
             if mode == 'sample':
-                value = np.random.normal(mean, np.sqrt(cov))
+                value = np.random.normal(mean, np.sqrt(cov_chol[0, 0]))
             else:
                 value = mean  # MAP estimate
             params[am_param] = value
         else:
             if mode == 'sample':
-                value = np.random.multivariate_normal(mean, cov)
+                # Sample from a normal distribution with mean 0 and cov 1.
+                z = np.random.normal(size=len(self.am_params))
+                # Transform to the desired mean and covariance using the Cholesky decomposition.
+                value = mean + cov_chol @ z    
             else:
                 value = mean  # MAP estimate
             for i, am_param in enumerate(self.am_params):
                 params[am_param] = value[i]
+
+
+def get_Cib(Lchol, b):
+    # Solve L y = b for y
+    y = np.linalg.solve(Lchol, b)
+    # Solve L^T x = y for x
+    x = np.linalg.solve(Lchol.T, y)
+    return x
+
+def get_bCib(Lchol, b):
+    # Solve L y = b for y
+    y = np.linalg.solve(Lchol, b)
+    # Compute b^T C^-1 b = y^T y
+    bCib = y.T @ y
+    return bCib
+
+def get_inv_chol(Lchol):
+    # Compute the inverse of the covariance matrix given its Cholesky decomposition
+    # Solve L y = I for y (where I is the identity matrix)
+    identity = np.eye(Lchol.shape[0])
+    y = np.linalg.solve(Lchol, identity)
+    # Solve L^T x = y for x
+    cov_inv = np.linalg.solve(Lchol.T, y)
+    return cov_inv
