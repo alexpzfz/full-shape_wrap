@@ -7,9 +7,12 @@ class Likelihood:
     def __init__(self, observable, emu, params, am_params=None,
                  am_sample = True, am_from_comet=False, conditional_prior=None):
         self.observable = observable
-        self.icov = np.linalg.inv(observable.cov)
-        self.lcov = np.linalg.cholesky(observable.cov)
+        self.cov = self.observable.cov
         self.nmocks_cov = observable.nmocks_cov
+        if self.nmocks_cov is not None:
+            self._rescale_covariance(mode='Hartlap')
+        self.icov = np.linalg.inv(self.cov)
+        self.lcov = np.linalg.cholesky(self.cov)
         self.emu = emu
         self.params = params
         self.params.z = observable.cosmo_fid['z']  # Set redshift in params for use in derived parameters if needed
@@ -21,8 +24,6 @@ class Likelihood:
             self.nbar = observable.nbar
             self.emu.define_nbar(self.nbar)
         
-        if self.nmocks_cov is not None:
-            self._rescale_covariance(mode='Hartlap')
         
         self.conditional_prior = None
         if conditional_prior is not None:
@@ -102,8 +103,9 @@ class Likelihood:
             factor = (n_mocks - n_data - 2) / (n_mocks - 1)
         else:
             raise NotImplementedError(f"Covariance rescaling mode '{mode}' not implemented")
-        print(f"Rescaling covariance by factor {factor:.3f} using {mode} correction: n_mocks={n_mocks}, n_data={n_data}")
-        self.icov *= factor
+        print(f"Rescaling covariance by factor {1/factor:.3f} using {mode} correction: n_mocks={n_mocks}, n_data={n_data}")
+        #self.icov *= factor
+        self.cov /= factor
 
     def _get_chi2_powerspectrum(self, params):
         comet_params = self.params.get_comet_dict(params)
