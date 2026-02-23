@@ -18,6 +18,8 @@ class Observable:
         self.nmocks_cov = nmocks_cov
         self.wmat = wmat
         self.xwin = xwin
+        if self.xwin is not None and not isinstance(self.xwin, list):
+            self.xwin = [self.xwin] * self.n_obs
         self.nobswin = None
         if wmat is not None:
             assert self.xwin is not None, "xwin must be provided if wmat is provided"
@@ -97,22 +99,24 @@ class PowerSpectrumMultipoles(Observable):
             self.nbar = self.nbar * self.h_fid**3 if self.nbar is not None else None
             if cov is not None:
                 self.cov = self.cov / self.h_fid**6
+            if self.xwin is not None:
+                self.xwin = [xwini * self.h_fid for xwini in self.xwin]
         self.k = self.x
         self.Pell = self.y
         self.kwin = self.xwin
         self.ell = [2*i for i in range(self.n_obs)]
         self.ellwin = [2*i for i in range(self.nobswin)] if self.nobswin is not None else None
 
-        # for the moment, store unformated data to use for comet AM chi2 function
-        self._k = k * self.h_fid if not Mpc_units else k
-        self._Pell = np.array(Pell) / self.h_fid**3 if not Mpc_units else np.array(Pell)
-        self._cov = cov / self.h_fid**6 if cov is not None and not Mpc_units else cov
-        self._kmax = kmax
-        if self._kmax is not None and not Mpc_units:
-            if isinstance(self._kmax, list):
-                self._kmax = [km * self.h_fid for km in self._kmax] 
-            else:
-                self._kmax = self._kmax * self.h_fid
+        # # for the moment, store unformated data to use for comet AM chi2 function
+        # self._k = k * self.h_fid if not Mpc_units else k
+        # self._Pell = np.array(Pell) / self.h_fid**3 if not Mpc_units else np.array(Pell)
+        # self._cov = cov / self.h_fid**6 if cov is not None and not Mpc_units else cov
+        # self._kmax = kmax
+        # if self._kmax is not None and not Mpc_units:
+        #     if isinstance(self._kmax, list):
+        #         self._kmax = [km * self.h_fid for km in self._kmax] 
+        #     else:
+        #         self._kmax = self._kmax * self.h_fid
     
     def plot(self, ax=None, h_units=False,**kwargs):
         import matplotlib.pyplot as plt
