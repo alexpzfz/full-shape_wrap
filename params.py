@@ -270,8 +270,6 @@ class Params:
         cosmo_dict['z'] = self.z
         return cosmo_dict
 
-
-
     def set_param_value(self, name, value):
         if name in self.parameters:
             self.parameters[name].value = value

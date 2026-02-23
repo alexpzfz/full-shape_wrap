@@ -40,21 +40,30 @@ class NautilusSampler(BaseSampler):
         
         # 2. Define the likelihood wrapper
         # Nautilus passes a dictionary of arguments if the prior was built with names
-        def likelihood_wrapper(param_dict):
-            full_dict = self.params.get_full_dict(param_dict)
-            loglike = self.likelihood.get_loglike(full_dict) 
-            if self.require_blobs:
-                blobs = [full_dict[name] for name in self.params.exported_derived_names]
-                return loglike, blobs
+        # def likelihood_wrapper(param_dict):
+        #     full_dict = self.params.get_full_dict(param_dict)
+        #     loglike = self.likelihood.get_loglike(full_dict) 
+        #     if self.require_blobs:
+        #         blobs = [full_dict[name] for name in self.params.exported_derived_names]
+        #         return loglike, blobs
             
-            return loglike
+        #     return loglike
 
         # 3. Initialize Nautilus Sampler
         self.sampler = Sampler(
             self.prior, 
-            likelihood_wrapper,
+            self.likelihood_wrapper,
             **kwargs,
         )
+
+    def likelihood_wrapper(self, param_dict):
+        full_dict = self.params.get_full_dict(param_dict)
+        loglike = self.likelihood.get_loglike(full_dict) 
+        if self.require_blobs:
+            blobs = [full_dict[name] for name in self.params.exported_derived_names]
+            return loglike, blobs
+        
+        return loglike
 
     def sample(self, **kwargs):
         """Run the Nautilus sampling algorithm"""
