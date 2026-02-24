@@ -1,6 +1,7 @@
 import numpy as np
 import dataclasses
 from typing import Callable, Optional, Union
+from functools import partial
 
 @dataclasses.dataclass
 class Parameter:
@@ -38,7 +39,7 @@ _bias_params = {"EggScoSmi": [
     "AssBauGre": [
     Parameter(name="b1", value=1.0, prior=(0.5, 4.0), prior_type="uniform", fixed=False, latex=r"b_1"),
     Parameter(name="b2", value=0.0, prior=(-2.0, 2.0), prior_type="uniform", fixed=False, latex=r"b_2"),
-    Parameter(name="bG2", value=0.0, prior=(-5.0, 5.0), prior_type="uniform", fixed=True, latex=r"b_{G2}"),
+    Parameter(name="bG2", value=0.0, prior=(-5.0, 5.0), prior_type="uniform", fixed=True, latex=r"b_{G_{2}}"),
     Parameter(name="bGam3", value=0.0, prior=(-5.0, 5.0), prior_type="uniform", fixed=True, latex=r"b_{\Gamma_{3}}"),],
 
     "DesJeoSch": [
@@ -94,16 +95,18 @@ class Params:
                 elif name == "btd" or name == "btdt": self.set_derived_param(name, self.btd_coev)
                 else:
                     raise ValueError(f"Co-evolution for {name} not implemented.")
-        self.sigmaR_ref = None  # Only relevant for DESI_DR2 bias basis
         self.derived_order = []
         self.z = None # Placeholder for redshift, can be set externally if needed for derived parameters
         self.use_reparam = False
-        self.get_reparam_factor = None
+        self.reparam_bias_mode = None
+        self.reparam_counterterms_mode = None
+        self.reparam_stochastic_mode = None
+        self.sigmaR_ref = None
         
 
-    def set_reference_sigmaR(self, sigmaR):
-        assert 'DESI_DR2' in self.emu.bias_basis, "Reference sigmaR is only relevant for DESI_DR2 bias basis."
-        self.sigmaR_ref = sigmaR
+    # def set_reference_sigmaR(self, sigmaR):
+    #     assert 'DESI_DR2' in self.emu.bias_basis, "Reference sigmaR is only relevant for DESI_DR2 bias basis."
+    #     self.sigmaR_ref = sigmaR
 
     def add_sampled_param(self, name, value, prior, prior_type="uniform", latex=""):
         """Helper to add a new sampled parameter on the fly"""
@@ -248,15 +251,15 @@ class Params:
                         full_dict[name] = param.derived_func(full_dict)
 
 
-        if self.emu.bias_basis == "DESI_DR2" and self.sigmaR_ref is not None:
-            full_dict['b1t'] = full_dict['b1t'] * self.sigmaR_ref
-            full_dict['b2t'] = full_dict['b2t'] * self.sigmaR_ref**2
-            full_dict['bK2t'] = full_dict['bK2t'] * self.sigmaR_ref**2
-            full_dict['btdt'] = full_dict['btdt'] * self.sigmaR_ref**4
-        if self.emu.counterterm_basis == "DESI_DR2" and self.sigmaR_ref is not None:
-            full_dict['a0'] = full_dict['a0'] * self.sigmaR_ref**2
-            full_dict['a2'] = full_dict['a2'] * self.sigmaR_ref**2
-            full_dict['a4'] = full_dict['a4'] * self.sigmaR_ref**2
+        # if self.emu.bias_basis == "DESI_DR2" and self.sigmaR_ref is not None:
+        #     full_dict['b1t'] = full_dict['b1t'] * self.sigmaR_ref
+        #     full_dict['b2t'] = full_dict['b2t'] * self.sigmaR_ref**2
+        #     full_dict['bK2t'] = full_dict['bK2t'] * self.sigmaR_ref**2
+        #     full_dict['btdt'] = full_dict['btdt'] * self.sigmaR_ref**4
+        # if self.emu.counterterm_basis == "DESI_DR2" and self.sigmaR_ref is not None:
+        #     full_dict['a0'] = full_dict['a0'] * self.sigmaR_ref**2
+        #     full_dict['a2'] = full_dict['a2'] * self.sigmaR_ref**2
+        #     full_dict['a4'] = full_dict['a4'] * self.sigmaR_ref**2
         return full_dict
     
     def get_comet_dict(self, full_dict):
@@ -328,9 +331,62 @@ class Params:
             q_ap = q_par / q_perp
             return q_iso, q_ap
 
+    def get_qiso3(self, p):
+        q_iso = (self.get_AP_parameters(basis='iso_ap')[0])**3
+        return q_iso
+    
+    def _reparam_bias_factor(self, p, name):
+        factor_ap = 1.0
+        factor_sigmaR = 1.0
+        if 'ap' in self.reparam_bias_mode:
+            factor_ap = np.sqrt(p['q_iso3'])
+        if 'sigma_12' in self.reparam_bias_mode:
+            factor_sigmaR = self.sigmaR_ref / p['sigma_12']
+
+        if name == 'b1_r':
+            return factor_sigmaR * factor_ap
+        if name in ['b2_r', 'b2t_r', 'g2_r', 'bK2_r', 'bG2_r']:
+            return factor_sigmaR**2 * factor_ap
+        if name in ['g21_r', 'bGam3_r', 'btd_r']:
+            if self.reparam_3ordbias_power == 3.0:
+                return factor_sigmaR**3 * factor_ap
+            elif self.reparam_3ordbias_power == 4.0:
+                return factor_sigmaR**4 * factor_ap**2
+
+    def _reparam_counterterm_factor(self, p):
+        factor = 1.0
+        if 'ap' in self.reparam_counterterms_mode:
+            factor *= p['q_iso3']
+        if 'sigma_12' in self.reparam_counterterms_mode:
+            factor *= self.sigmaR_ref**2 / p['sigma_12']**2
+        return factor
+
+    def _reparam_stochastic_factor(self, p):
+        factor = 1.0
+        if 'ap' in self.reparam_stochastic_mode:
+            factor *= p['q_iso3']
+        return factor
+        
+    def get_reparam_factor(self, p, name):
+        base_name = name.replace('_r', '')
+        if base_name in self.bias_params:
+            return self._reparam_bias_factor(p, name)
+        elif base_name in self.counterterm_params:
+            return self._reparam_counterterm_factor(p)
+        elif base_name in self.stochastic_params:
+            return self._reparam_stochastic_factor(p)
+        else:
+            return 1.0
+    
+    def _compute_reparam(self, p, name):
+        return p[name] * self.get_reparam_factor(p, name)
+    
+    def _derived_from_name(self, name):
+        return partial(self._compute_reparam, name=name)
+        
 
     def use_reparametrization(self, bias_mode='ap+sigma_12', counterterms_mode='ap+sigma_12',
-                              stochastic_mode='ap', sigmaR_ref=1.0):
+                              stochastic_mode='ap', third_oder_bias_power=3.0, sigmaR_ref=1.0):
 
         # verify that the specified modes are valid
         valid_modes = ['ap', 'sigma_12', 'ap+sigma_12', 'none']
@@ -341,6 +397,11 @@ class Params:
         if stochastic_mode not in valid_modes:
             raise ValueError(f"Invalid stochastic_mode {stochastic_mode}. Must be one of {valid_modes}.") 
         self.use_reparam = True
+        self.reparam_bias_mode = bias_mode
+        self.reparam_counterterms_mode = counterterms_mode
+        self.reparam_stochastic_mode = stochastic_mode
+        self.reparam_3ordbias_power = third_oder_bias_power
+        self.sigmaR_ref = sigmaR_ref
 
         require_ap = 'ap' in bias_mode or 'ap' in counterterms_mode or 'ap' in stochastic_mode
         require_sigma_12 = 'sigma_12' in bias_mode or 'sigma_12' in counterterms_mode or 'sigma_12' in stochastic_mode
@@ -349,47 +410,22 @@ class Params:
         reparam_stochastic = stochastic_mode in ['ap'] # no sigma_12 required for shot noise
 
         if require_ap:
-            self.set_derived_param('q_iso3', lambda p: self.get_AP_parameters(basis='iso_ap')[0]**3, requires_emu_eval=True, latex=r"q_{\rm iso}^3", exported=True)
+            self.set_derived_param('q_iso3', self.get_qiso3, requires_emu_eval=True, latex=r"q_{\rm iso}^3", exported=True)
         
         if require_sigma_12:
             self.set_derived_param('sigma_12', 's12', requires_emu_eval=True, latex=r"\sigma_{12}", exported=True)
 
-        if reparam_counterterms:
-
-            def reparam_counterterm_factor(p, name):
-                factor = 1.0
-                if 'ap' in counterterms_mode:
-                    factor *= p['q_iso3']
-                if 'sigma_12' in counterterms_mode:
-                    factor *= sigmaR_ref**2 / p['sigma_12']**2
-                return factor
-                
-
+        if reparam_counterterms: 
             for name in self.counterterm_params.keys():
                 name_reparam = name + '_r'
-                latex_reparam = self.add_tilde_to_latex(self.parameters[name].latex)
+                latex_reparam = add_tilde_to_latex(self.parameters[name].latex)
                 self.add_sampled_param(name_reparam, value=0.0, prior=(0, 500), prior_type="gaussian", latex=latex_reparam)
-                self.set_derived_param(name, lambda p, n=name_reparam: p[n] * reparam_counterterm_factor(p, n), latex=self.parameters[name].latex, exported=True)
+                self.set_derived_param(name, self._derived_from_name(name_reparam), latex=self.parameters[name].latex, exported=True)
 
         if reparam_bias:
-            def reparam_bias_factor(p, name):
-                factor_ap = 1.0
-                factor_sigmaR = 1.0
-                if 'ap' in bias_mode:
-                    factor_ap = np.sqrt(p['q_iso3'])
-                if 'sigma_12' in bias_mode:
-                    factor_sigmaR = sigmaR_ref / p['sigma_12']
-
-                if name == 'b1_r':
-                    return factor_sigmaR * factor_ap
-                if name in ['b2_r', 'b2t_r', 'g2_r', 'bK2_r', 'bG2_r']:
-                    return factor_sigmaR**2 * factor_ap
-                if name in ['g21_r', 'bGam3_r', 'btd_r']:
-                    return factor_sigmaR**3 * factor_ap
-
             for name in self.bias_params.keys():
                 name_reparam = name + '_r'
-                latex_reparam = self.add_tilde_to_latex(self.parameters[name].latex)
+                latex_reparam = add_tilde_to_latex(self.parameters[name].latex)
                 if name == 'b1':
                     prior_type = 'uniform'
                     prior = (0.5, 4.0)
@@ -398,37 +434,25 @@ class Params:
                     prior = (0, 20)
 
                 self.add_sampled_param(name_reparam, value=0.0, prior=prior, prior_type=prior_type, latex=latex_reparam)
-                self.set_derived_param(name, lambda p, n=name_reparam: p[n] * reparam_bias_factor(p, n), latex=self.parameters[name].latex, exported=True)
+                self.set_derived_param(name, self._derived_from_name(name_reparam), latex=self.parameters[name].latex, exported=True)
             
         if reparam_stochastic:
-            def reparam_stochastic_factor(p, name):
-                factor = 1.0
-                if 'ap' in stochastic_mode:
-                    factor *= p['q_iso3']
-                return factor
-
             for name in self.stochastic_params.keys():
                 name_reparam = name + '_r'
-                latex_reparam = self.add_tilde_to_latex(self.parameters[name].latex)
+                latex_reparam = add_tilde_to_latex(self.parameters[name].latex)
                 self.add_sampled_param(name_reparam, value=0.0, prior=(-1e4, 1e4), prior_type="uniform", latex=latex_reparam)
-                self.set_derived_param(name, lambda p, n=name_reparam: p[n] * reparam_stochastic_factor(p, n), latex=self.parameters[name].latex, exported=True)
+                self.set_derived_param(name, self._derived_from_name(name_reparam), latex=self.parameters[name].latex, exported=True)
 
-        self.get_reparam_factor = lambda p, name: reparam_bias_factor(p, name) if name.replace('_r', '') in self.bias_params \
-                                  else (reparam_counterterm_factor(p, name) if name.replace('_r', '') in self.counterterm_params \
-                                  else (reparam_stochastic_factor(p, name) if name.replace('_r', '') in self.stochastic_params else 1.0))
-    
-
-    @staticmethod
-    def add_tilde_to_latex(latex_str):
-        # separate base from the rest of the string
-        base = ''
-        rest = ''
-        i = 0
-        while i < len(latex_str):
-            if latex_str[i] in ['^', '_']:
-                rest = latex_str[i:]
-                break
-            else:
-                base += latex_str[i]
-            i += 1
-        return r"\tilde{" + base + "}" + rest
+def add_tilde_to_latex(latex_str):
+    # separate base from the rest of the string
+    base = ''
+    rest = ''
+    i = 0
+    while i < len(latex_str):
+        if latex_str[i] in ['^', '_']:
+            rest = latex_str[i:]
+            break
+        else:
+            base += latex_str[i]
+        i += 1
+    return r"\tilde{" + base + "}" + rest
