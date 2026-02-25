@@ -18,6 +18,7 @@ class Likelihood:
         self.params.z = observable.cosmo_fid['z']  # Set redshift in params for use in derived parameters if needed
         self.de_model = self.params.de_model
         self.x = observable.x
+        self.xwin = observable.xwin
         self.y = observable.get_flatten()
         self.emu.define_fiducial_cosmology(observable.cosmo_fid)
         if getattr(self.observable, 'nbar', None) is not None:
@@ -185,6 +186,8 @@ class Likelihood:
     def get_design_matrix_ps(self, params):
         comet_params = self.params.get_comet_dict(params)
         design_mat = np.zeros((len(self.y), len(self.am_params)))
+        xeval = self.xwin if self.xwin is not None else self.x
+        convol = self.xwin is not None
         for i, param in enumerate(self.am_params):
             if param.endswith('_r'):
                 param_base = param.replace('_r', '')
@@ -192,16 +195,24 @@ class Likelihood:
             else:
                 param_base = param
                 factor = 1.0
-            diag_to_marg = self.emu.diagrams_to_marg[param_base]
-            bx = self.emu._get_bias_coeff_for_AM(diag_to_marg)
-            
-            bx = bx * factor# Apply reparametrization factor if needed
-            px_ell = self.emu.PX_ell(self.x, comet_params, self.observable.ell, diag_to_marg, de_model=self.de_model)
+
+            if param_base not in ['a0', 'a2', 'a4']: 
+                diag_to_marg = self.emu.diagrams_to_marg[param_base]
+                bx = self.emu._get_bias_coeff_for_AM(diag_to_marg)
+                
+                bx = bx * factor# Apply reparametrization factor if needed
+                px_ell = self.emu.PX_ell(xeval, comet_params, self.observable.ell, diag_to_marg, de_model=self.de_model)
+            else:
+                diag_to_marg = self.emu._extra_diagrams_to_marg[param_base]
+                bx = factor # Apply reparametrization factor if needed
+                px_ell = self.emu.PX_ell_extra(xeval, comet_params, self.observable.ell, diag_to_marg, de_model=self.de_model)
             nx = px_ell[f'ell0'].ndim
             if nx == 1:
                 m_list = [bx * px_ell[f'ell{l}'] for l in self.observable.ell]
             elif nx > 1:
                 m_list = [np.sum(bx * px_ell[f'ell{l}'], axis=1) for l in self.observable.ell] 
+            if convol:
+                m_list = [self.observable.wmat @ mli for mli in m_list]
             m_vec = np.concatenate(m_list)
             design_mat[:, i] = m_vec
         return design_mat

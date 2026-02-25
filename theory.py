@@ -2,6 +2,7 @@ from comet import comet
 import numpy as np
 from observables import PowerSpectrumMultipoles, BispectrumScoccimarroMultipoles, JointObservable
 from bispectrum import bispectrum_scoccimarro_proj
+from scipy.special import eval_legendre
 
 class BaseModel:
     """Base class for models"""
@@ -27,7 +28,9 @@ class COMET(comet, BaseModel):
     """COMET model for power spectrum and bispectrum"""
     # weird hack: wrapper is an emu instance itself
     def __init__(self, **kwargs):
-        super().__init__(**kwargs) 
+        super().__init__(**kwargs)
+        self._extra_diagrams = ['Pctr_a0', 'Pctr_a2', 'Pctr_a4']
+        self._extra_diagrams_to_marg = {'a0': 'Pctr_a0', 'a2': 'Pctr_a2', 'a4': 'Pctr_a4'}
 
     def predict_power_spectrum_multipoles(self, observable, params, de_model):
         k = observable.k if observable.kwin is None else observable.kwin
@@ -48,12 +51,26 @@ class COMET(comet, BaseModel):
         bscocc = bscocc.flatten()
         return bscocc
 
+    def PX_ell_extra(self, k, params, ell, diagram, de_model):
+        mu = self.gl_x
+        mu2 = self.gl_x2
+        APfac = np.sqrt(
+            np.divide.outer(mu2, self.params['q_lo']**2) \
+            + np.divide.outer(1.0 - mu2, self.params['q_tr']**2))
+        kp = np.multiply.outer(k, APfac)
+        mup = np.divide.outer(mu, self.params['q_lo'])/APfac
 
+        p2d = -0.5 * self.PX_2d(kp, mup, params, 'Pctr_c0', de_model=de_model)
+        q3 = self.params['q_lo'] * self.params['q_tr']**2
 
-
-
-            
-
-    
-
-
+        prefact_dict = {'Pctr_a0': self.params['b1'], 'Pctr_a2': self.params['f'] * mup**2, 'Pctr_a4': self.params['f'] * mup**4}
+        kaiser_fact = (self.params['b1'] + self.params['f'] * mup**2)
+        wdamping = self._W_kurt(kp, mup)[:, None, ...]
+        res = {}
+        for ll in ell:
+            integrand = kaiser_fact * prefact_dict[diagram] * p2d * wdamping
+            legendre = eval_legendre.outer(ll, mu)[None, :]
+            r_ = 0.5 * np.einsum("aebc,db,b->adec", integrand, legendre,
+                                   self.gl_weights) 
+            res[f'ell{ll}'] = (2 * ll + 1)/q3 * r_[0, 0, :, 0]
+        return res
