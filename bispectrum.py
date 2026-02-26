@@ -112,21 +112,6 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=['000'], nbar=1.0, *
     bfull_flat = bfull.reshape(n, -1)
     res = {}
     for ll in ell:
-        # l1, l2, L = map(int, ll)
-        # proj_operator = np.zeros(bfull.shape[1:]) # shape (nmu1, nmu12, nphi)
-        # # need a single m
-        # for M in range(-L, L+1):
-        #     w3j = wigner_3j(l1, l2, L, 0, -M, M)
-        #     if w3j == 0:
-        #         continue
-        #     y1 = sph_harm(l2, -M, mu12, 0)
-        #     y2 = sph_harm(L, M, mu1, phi)
-        #     proj_operator = proj_operator + w3j * y1 * y2
-        # proj_operator = (proj_operator * w_mu1 * w_mu12 * w_phi).squeeze() 
-        # integral = np.tensordot(bfull, proj_operator, axes=([1,2,3], [0,1,2]))
-        # prefactor = (2*l1 + 1) * (2*l2 + 1) * (2*L + 1) / (4 * np.pi)
-        # res[f'{ll}'] = prefactor * integral
-        # 2. Replaced tensordot with a much faster flattened dot product (@)
         res[f'{ll}'] = bfull_flat @ proj_ops[f'{ll}']
 
     return res
