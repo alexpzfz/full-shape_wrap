@@ -70,9 +70,9 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[0, 2], nbar=
     mu12 = get_dot_cosine(k1, k2, k3)
     # ensure mu12 is in the range [-1, 1] to avoid numerical issues with sqrt
     mu12 = np.clip(mu12, -1, 1)
-    mu2_grid = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi)
+    mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi)
     # reshape everything to be (ntri, nmu, nphi)
-    bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2_grid, emu, comet_params, nbar=nbar, **kwargs) # shape (ntri, nmu, nphi)
+    bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, nbar=nbar, **kwargs) # shape (ntri, nmu, nphi)
     res = {}
     for ll in ell:
         lell = legendre(ll)(mu1) # shape (1, nmu, 1)
@@ -81,7 +81,6 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[0, 2], nbar=
         res[f'ell{ll}'] = bell
     return res
 
-from time import time
 def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=['000'], nbar=1.0, **kwargs):
     # let's use Scoccimarro coordinate system!!
     n = k1.shape[0]
@@ -150,6 +149,106 @@ def get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_phi, mu1, 
         
     _PROJ_CACHE[cache_key] = res_ops
     return res_ops
+
+def BX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, nbar=1.0, **kwargs):
+    # only supporting NP0, NB0 and MB0\
+    params = emu.params
+    b1, f, avir, sv = params['b1'], params['f'], params['avir'], params['sv']
+    qpar, qperp = params['q_lo'], params['q_tr']
+    qiso6 = qpar**2 * qperp**4
+    if diagram == 'B_NP0':
+        NP0, MB0, NB0 = 1, 0, 0
+    elif diagram == 'B_MB0':
+        NP0, MB0, NB0 = 0, 1, 0
+    elif diagram == 'B_NB0':
+        bstoch = np.ones_like(k1) * np.ones_like(mu1) * np.ones_like(mu2)
+        btosch = bstoch / (qiso6 * nbar**2)
+        return btosch
+     
+    mu3 = np.where(k3 > 0, - (mu1 * k1 + mu2 * k2) / k3, -1.0)
+    k1_p, mu1_p = apply_ap(k1, mu1, qpar, qperp) 
+    k2_p, mu2_p = apply_ap(k2, mu2, qpar, qperp)
+    k3_p, mu3_p = apply_ap(k3, mu3, qpar, qperp)
+    # k1, k2, k3 are either arrays of any shape or floats
+    k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
+    kunique = np.unique(k_all)
+    pdw = emu.Pdw(kunique, comet_params, mu=0.6, **kwargs)
+    pdw1 = pdw[np.searchsorted(kunique, k1_p)]
+    pdw2 = pdw[np.searchsorted(kunique, k2_p)]
+    pdw3 = pdw[np.searchsorted(kunique, k3_p)]
+    
+    bstoch = stoch_term(k1_p, mu1_p, b1, f, avir, sv, MB0, NP0) * pdw1 + \
+             stoch_term(k2_p, mu2_p, b1, f, avir, sv, MB0, NP0) * pdw2 + \
+             stoch_term(k3_p, mu3_p, b1, f, avir, sv, MB0, NP0) * pdw3
+    bstoch = bstoch * 1/nbar
+    bstoch = bstoch / qiso6
+    return bstoch
+
+def BX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, nbar=1.0, **kwargs):
+    nmu, nphi = kwargs.pop('nmu', 20), kwargs.pop('nphi', 20)
+    mu, w_mu = np.polynomial.legendre.leggauss(nmu)
+    phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)
+    w_phi = 2 * np.pi / nphi
+    mu1 = mu[None, :, None] # shape (1, nmu, 1)
+    phi = phi[None, None, :] # shape (1, 1, nphi)
+    k1, k2, k3 = k1[:, None, None], k2[:, None, None], k3[:, None, None] # shape (ntri, 1, 1)
+    mu12 = get_dot_cosine(k1, k2, k3)
+    mu12 = np.clip(mu12, -1, 1)
+    mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi)
+    bfull = BX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, nbar=nbar, **kwargs) # shape (ntri, nmu, nphi)
+    if diagram == 'B_NB0':
+        b0 = np.ones(k1.shape[0]) * bfull[0, 0, 0]
+        res = {f'ell{ll}': b0 if ll == 0 else np.zeros_like(b0) for ll in ell}
+        return res
+    res = {}
+    for ll in ell:
+        lell = legendre(ll)(mu1) # shape (1, nmu, 1)
+        integral = np.sum(bfull * lell * w_mu[None, :, None] * w_phi, axis=(1, 2)) # shape (ntri,)
+        bell = (2*ll + 1) * integral / (4 * np.pi)
+        res[f'ell{ll}'] = bell
+    return res
+
+
+def BX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, nbar=1.0, **kwargs):
+    nmu1, nmu12, nphi = kwargs.pop('nmu1', 20), kwargs.pop('nmu12', 20), kwargs.pop('nphi', 20)
+    mu1, w_mu1 = np.polynomial.legendre.leggauss(nmu1)
+    mu12, w_mu12 = np.polynomial.legendre.leggauss(nmu12)
+    phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)
+    w_phi = 2 * np.pi / nphi
+    mu1 = mu1[None, :, None, None] # shape (1, nmu1, 1, 1)
+    w_mu1 = w_mu1[None, :, None, None] # shape (1, nmu1, 1, 1)
+    mu12 = mu12[None, None, :, None] # shape (1, 1, nmu12, 1)
+    w_mu12 = w_mu12[None, None, :, None] # shape (1, 1, nmu12, 1)
+    phi = phi[None, None, None, :] # shape (1, 1, 1, nphi)
+
+    k1, k2 = k1[:, None, None, None], k2[:, None, None, None] # shape (ntri, 1, 1, 1)
+    
+    k3 = np.sqrt(k1**2 + k2**2 + 2 * k1 * k2 * mu12) # shape (ntri, 1, nmu12, 1)
+    mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi) # shape (ntri, nmu1, nmu12, nphi)
+    
+    bfull = BX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram=diagram,
+                  nbar=nbar,
+                  **kwargs) # shape (ntri, nmu1, nmu12, nphi)
+    if diagram == 'B_NB0':
+        b0 = np.ones(k1.shape[0]) * bfull[0, 0, 0, 0]
+        res = {f'{ll}': b0 if ll == '000' else np.zeros_like(b0) for ll in ell}
+        return res
+
+    proj_ops = get_cached_proj_operator(nmu1=nmu1,
+                                       nmu12=nmu12,
+                                       nphi=nphi,
+                                       ell=ell,
+                                       w_mu1=w_mu1,
+                                       w_mu12=w_mu12,
+                                       w_phi=w_phi,
+                                       mu1=mu1,
+                                       mu12=mu12,
+                                       phi=phi)
+    bfull_flat = bfull.reshape(bfull.shape[0], -1)
+    res = {}
+    for ll in ell:
+        res[f'{ll}'] = bfull_flat @ proj_ops[f'{ll}']
+    return res
 
 
 def kernel_Z1(mu, b1, f):

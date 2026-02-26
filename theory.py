@@ -1,7 +1,7 @@
 from comet import comet
 import numpy as np
 from observables import PowerSpectrumMultipoles, BispectrumScoccimarroMultipoles, JointObservable
-from bispectrum import bispectrum_scoccimarro_proj
+from bispectrum import bispectrum_scoccimarro_proj, bispectrum_sugiyama_proj
 from scipy.special import eval_legendre
 
 class BaseModel:
@@ -50,6 +50,14 @@ class COMET(comet, BaseModel):
         bscocc = bispectrum_scoccimarro_proj(k1, k2, k3, self, params, ell=ell, de_model=de_model) #shape (ntri, n_ell)
         bscocc = bscocc.flatten()
         return bscocc
+
+    def predict_bispectrum_sugiyama_multipoles(self, observable, params, de_model):
+        k1 = observable.k1
+        k2 = observable.k2
+        ell = observable.ell
+        bsugi = bispectrum_sugiyama_proj(k1, k2, self, params, ell=ell, de_model=de_model) #shape (ntri, n_ell)
+        bsugi = bsugi.flatten()
+        return bsugi
 
     def PX_ell_extra(self, k, params, ell, diagram, de_model):
         mu = self.gl_x
