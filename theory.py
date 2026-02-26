@@ -61,16 +61,17 @@ class COMET(comet, BaseModel):
         mup = np.divide.outer(mu, self.params['q_lo'])/APfac
 
         p2d = -0.5 * self.PX_2d(kp, mup, params, 'Pctr_c0', de_model=de_model)
+        p2d = p2d[0]
         q3 = self.params['q_lo'] * self.params['q_tr']**2
 
         prefact_dict = {'Pctr_a0': self.params['b1'], 'Pctr_a2': self.params['f'] * mup**2, 'Pctr_a4': self.params['f'] * mup**4}
         kaiser_fact = (self.params['b1'] + self.params['f'] * mup**2)
-        wdamping = self._W_kurt(kp, mup)[:, None, ...]
+        wdamping = self._W_kurt(kp, mup)
         res = {}
-        for ll in ell:
-            integrand = kaiser_fact * prefact_dict[diagram] * p2d * wdamping
-            legendre = eval_legendre.outer(ll, mu)[None, :]
-            r_ = 0.5 * np.einsum("aebc,db,b->adec", integrand, legendre,
-                                   self.gl_weights) 
-            res[f'ell{ll}'] = (2 * ll + 1)/q3 * r_[0, 0, :, 0]
+        integrand = kaiser_fact * prefact_dict[diagram] * p2d * wdamping
+        legendre = eval_legendre.outer(ell, mu)
+        r_ = 0.5 * np.einsum("aebc,db,b->adec", integrand, legendre,
+                                self.gl_weights) 
+        for i, ll in enumerate(ell):
+            res[f'ell{ll}'] = (2 * ll + 1)/q3 * r_[0, i, :, 0]
         return res
