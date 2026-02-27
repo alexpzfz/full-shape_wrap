@@ -212,9 +212,9 @@ class Likelihood:
                 m_list = [bx * px_ell[f'ell{l}'] for l in self.observable.ell]
             elif nx > 1:
                 m_list = [np.sum(bx * px_ell[f'ell{l}'], axis=1) for l in self.observable.ell] 
-            if convol:
-                m_list = [self.observable.wmat @ mli for mli in m_list]
             m_vec = np.concatenate(m_list)
+            if convol:
+                m_vec = self.observable.wmat @ m_vec
             design_mat[:, i] = m_vec
         return design_mat
     

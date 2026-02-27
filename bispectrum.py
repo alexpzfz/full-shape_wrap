@@ -212,7 +212,7 @@ def BX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
 
 
 def BX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, **kwargs):
-    nmu1, nmu12, nphi = kwargs.pop('nmu1', 20), kwargs.pop('nmu12', 20), kwargs.pop('nphi', 20)
+    nmu1, nmu12, nphi = kwargs.pop('nmu1', 5), kwargs.pop('nmu12', 5), kwargs.pop('nphi', 10)
     mu1, w_mu1 = np.polynomial.legendre.leggauss(nmu1)
     mu12, w_mu12 = np.polynomial.legendre.leggauss(nmu12)
     phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)

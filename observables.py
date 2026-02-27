@@ -18,8 +18,6 @@ class Observable:
         self.nmocks_cov = nmocks_cov
         self.wmat = wmat
         self.xwin = xwin
-        if self.xwin is not None and not isinstance(self.xwin, list):
-            self.xwin = [self.xwin] * self.n_obs
         self.nobswin = None
         if wmat is not None:
             assert self.xwin is not None, "xwin must be provided if wmat is provided"
@@ -87,8 +85,8 @@ class Observable:
 
 class PowerSpectrumMultipoles(Observable):
     """Power spectrum multipoles"""
-    def __init__(self, k, Pell, cov=None, nbar=None, cosmo_fid=None, Mpc_units=False, kmin=None, kmax=None,
-                 wmat=None, kwin=None, kwinmin=None, kwinmax=None, nmocks_cov=None):
+    def __init__(self, k, Pell, ell=None, cov=None, nbar=None, cosmo_fid=None, Mpc_units=False, kmin=None, kmax=None,
+                 wmat=None, kwin=None, ellwin=None, kwinmin=None, kwinmax=None, nmocks_cov=None):
         super().__init__(k, Pell, cov, nbar, cosmo_fid, xmin=kmin, xmax=kmax, nmocks_cov=nmocks_cov,
                          wmat=wmat, xwin=kwin, xwinmin=kwinmin, xwinmax=kwinmax)
         # Internatlly, everything is done in Mpc units
@@ -104,8 +102,10 @@ class PowerSpectrumMultipoles(Observable):
         self.k = self.x
         self.Pell = self.y
         self.kwin = self.xwin
-        self.ell = [2*i for i in range(self.n_obs)]
-        self.ellwin = [2*i for i in range(self.nobswin)] if self.nobswin is not None else None
+        self.ell = ell if ell is not None else [2*i for i in range(self.n_obs)]
+        self.ellwin = ellwin
+        if self.ellwin is None and self.wmat is not None:
+            self.ellwin = [2*i for i in range(self.nobswin)]
 
         # # for the moment, store unformated data to use for comet AM chi2 function
         # self._k = k * self.h_fid if not Mpc_units else k
@@ -173,8 +173,10 @@ class BispectrumScoccimarroMultipoles(Observable):
         return ax
     
 class BispectrumSugiyamaMultipoles(Observable):
-    def __init__(self, pair, Bell, ell=None, cov=None, nbar=None, cosmo_fid=None, Mpc_units=False, kmin=None, kmax=None, nmocks_cov=None):
-        super().__init__(pair, Bell, cov, nbar, cosmo_fid, xmin=kmin, xmax=kmax, nmocks_cov=nmocks_cov)
+    def __init__(self, pair, Bell, ell=None, cov=None, nbar=None, cosmo_fid=None, Mpc_units=False, kmin=None, kmax=None,
+                 wmat=None, kwin=None, ellwin=None, kwinmin=None, kwinmax=None, nmocks_cov=None):
+        super().__init__(pair, Bell, cov, nbar, cosmo_fid, xmin=kmin, xmax=kmax, wmat=wmat, xwin=kwin, 
+                         xwinmin=kwinmin, xwinmax=kwinmax, nmocks_cov=nmocks_cov)
         if not Mpc_units:
             assert getattr(self, 'h_fid') is not None, "h value is required to convert to Mpc units"
             self.x = [xi * self.h_fid for xi in self.x]
@@ -185,7 +187,7 @@ class BispectrumSugiyamaMultipoles(Observable):
         self.pair = self.x
         self.Bell = self.y
         self.ell = ell
-        self.ellwin = None
+        self.ellwin = ellwin
     
     def plot(self, ax=None, h_units=False, **kwargs):
         import matplotlib.pyplot as plt
@@ -194,15 +196,15 @@ class BispectrumSugiyamaMultipoles(Observable):
         factor = 1.0
         if h_units and getattr(self, 'h_fid') is not None:
             factor = self.h_fid
-            ax.set_xlabel(r'Pair index')
-            ax.set_ylabel(r'$B_\ell(k_1, k_2) ~ [h^{-6} ~ \mathrm{Mpc}^6]$')
+            ax.set_xlabel(r'$k ~ [h^{-1} ~ \mathrm{Mpc}]$')
+            ax.set_ylabel(r'$k^2 B_{\ell_1 \ell_2 L} ~ [h^{-4} ~ \mathrm{Mpc}^4]$')
         else:
-            ax.set_xlabel(r'Pair index')
-            ax.set_ylabel(r'$B_\ell(k_1, k_2) ~ [\mathrm{Mpc}^6]$')
+            ax.set_xlabel(r'$k ~ [\mathrm{Mpc}^{-1}]$')
+            ax.set_ylabel(r'$k^2 B_{\ell_1 \ell_2 L} ~ [\mathrm{Mpc}^4]$')
         for i in range(self.n_obs):
             err = np.sqrt(np.diag(self.cov))[sum(len(yi) for yi in self.y[:i]):sum(len(yi) for yi in self.y[:i+1])]
-            pindex = np.arange(len(self.y[i]))
-            ax.errorbar(pindex, self.y[i] * factor**6, yerr=err * factor**6, label=fr'$\ell = {{{2*i}}}$', fmt='o', **kwargs)
+            k = self.x[i][:, 0] # Assuming the first column of pair is k
+            ax.errorbar(k/factor, k**2 * self.y[i] * factor**4, yerr= k**2 *err * factor**4, label=fr'$\ell_1 \ell_2 L = {{{self.ell[i]}}}$', fmt='o', **kwargs)
         
         ax.legend()
         return ax
@@ -241,3 +243,11 @@ class JointObservable(Observable):
 
     def get_block_cov(self, cov1, cov2):
         return np.block([[cov1, np.zeros((cov1.shape[0], cov2.shape[1]))], [np.zeros((cov2.shape[0], cov1.shape[1])), cov2]])
+
+    def plot(self, axes=None, h_units=False, **kwargs):
+        if axes is None:
+            import matplotlib.pyplot as plt
+            fig, axes = plt.subplots(1, len(self.observables), figsize=(5*len(self.observables), 4))
+        for obs, ax in zip(self.observables, axes):
+            obs.plot(ax=ax, h_units=h_units, **kwargs)
+        return axes
