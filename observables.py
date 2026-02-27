@@ -171,18 +171,57 @@ class BispectrumScoccimarroMultipoles(Observable):
         
         ax.legend()
         return ax
+    
+class BispectrumSugiyamaMultipoles(Observable):
+    def __init__(self, pair, Bell, ell=None, cov=None, nbar=None, cosmo_fid=None, Mpc_units=False, kmin=None, kmax=None, nmocks_cov=None):
+        super().__init__(pair, Bell, cov, nbar, cosmo_fid, xmin=kmin, xmax=kmax, nmocks_cov=nmocks_cov)
+        if not Mpc_units:
+            assert getattr(self, 'h_fid') is not None, "h value is required to convert to Mpc units"
+            self.x = [xi * self.h_fid for xi in self.x]
+            self.y = [yi / self.h_fid**6 for yi in self.y]
+            self.nbar = self.nbar * self.h_fid**3 if self.nbar is not None else None
+            if cov is not None:
+                self.cov = self.cov / self.h_fid**12
+        self.pair = self.x
+        self.Bell = self.y
+        self.ell = ell
+        self.ellwin = None
+    
+    def plot(self, ax=None, h_units=False, **kwargs):
+        import matplotlib.pyplot as plt
+        if ax is None:
+            fig, ax = plt.subplots()
+        factor = 1.0
+        if h_units and getattr(self, 'h_fid') is not None:
+            factor = self.h_fid
+            ax.set_xlabel(r'Pair index')
+            ax.set_ylabel(r'$B_\ell(k_1, k_2) ~ [h^{-6} ~ \mathrm{Mpc}^6]$')
+        else:
+            ax.set_xlabel(r'Pair index')
+            ax.set_ylabel(r'$B_\ell(k_1, k_2) ~ [\mathrm{Mpc}^6]$')
+        for i in range(self.n_obs):
+            err = np.sqrt(np.diag(self.cov))[sum(len(yi) for yi in self.y[:i]):sum(len(yi) for yi in self.y[:i+1])]
+            pindex = np.arange(len(self.y[i]))
+            ax.errorbar(pindex, self.y[i] * factor**6, yerr=err * factor**6, label=fr'$\ell = {{{2*i}}}$', fmt='o', **kwargs)
+        
+        ax.legend()
+        return ax
         
 
 class JointObservable(Observable):
-    def __init__(self, obs1, obs2, cov=None, cov_Mpc_units=False):
-        assert obs1.cosmo_fid == obs2.cosmo_fid, "Observables must have the same fiducial cosmology"
-        self.obs1 = obs1
-        self.obs2 = obs2
-        x = obs1.x + obs2.x
-        y = obs1.y + obs2.y
-        self.h_fid = obs1.h_fid
-        hpower_dict = {'PowerSpectrumMultipoles': 3.0, 'BispectrumScoccimarroMultipoles': 6.0}
+    def __init__(self, *observables, cov=None, cov_Mpc_units=False):
+        self.observables = observables # this is a list of Observable instances
+        # list of x and y for each observable
+        x = []
+        y = []
+        for obs in observables:
+            x.extend(obs.x)
+            y.extend(obs.y)
+        self.h_fid = observables[0].h_fid
+        hpower_dict = {'PowerSpectrumMultipoles': 3.0, 'BispectrumScoccimarroMultipoles': 6.0, 'BispectrumSugiyamaMultipoles': 6.0}
 
+        # for the moment only supporting two observables
+        obs1, obs2 = observables
         if cov is None:
             print("No covariance matrix provided for joint observable, constructing block diagonal covariance matrix")
             cov = self.get_block_cov(obs1.cov, obs2.cov)

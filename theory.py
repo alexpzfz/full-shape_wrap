@@ -1,6 +1,6 @@
 from comet import comet
 import numpy as np
-from observables import PowerSpectrumMultipoles, BispectrumScoccimarroMultipoles, JointObservable
+from observables import PowerSpectrumMultipoles, BispectrumScoccimarroMultipoles, BispectrumSugiyamaMultipoles, JointObservable
 from bispectrum import bispectrum_scoccimarro_proj, bispectrum_sugiyama_proj
 from scipy.special import eval_legendre
 
@@ -17,6 +17,8 @@ class BaseModel:
             return self.predict_power_spectrum_multipoles(observable, params, **kwargs)
         elif isinstance(observable, BispectrumScoccimarroMultipoles):
             return self.predict_bispectrum_scoccimarro_multipoles(observable, params, **kwargs)
+        elif isinstance(observable, BispectrumSugiyamaMultipoles):
+            return self.predict_bispectrum_sugiyama_multipoles(observable, params, **kwargs)
         elif isinstance(observable, JointObservable):
             pred_list = []
             for obs in observable.observables:
@@ -42,21 +44,16 @@ class COMET(comet, BaseModel):
         return pell
     
     def predict_bispectrum_scoccimarro_multipoles(self, observable, params, de_model):
-        # for the moment, no window support for bispectrum
-        k1 = observable.tri[:, 0]
-        k2 = observable.tri[:, 1]
-        k3 = observable.tri[:, 2]
-        ell = observable.ell
-        bscocc = bispectrum_scoccimarro_proj(k1, k2, k3, self, params, ell=ell, de_model=de_model) #shape (ntri, n_ell)
-        bscocc = bscocc.flatten()
-        return bscocc
+        bk = self.Bell_scoccimarro(observable.tri, params, observable.ell, de_model=de_model)
+        bk = np.concatenate([bk[f'ell{ell}'] for ell in observable.ell])
+        return bk
 
     def predict_bispectrum_sugiyama_multipoles(self, observable, params, de_model):
-        k1 = observable.k1
-        k2 = observable.k2
-        ell = observable.ell
-        bsugi = bispectrum_sugiyama_proj(k1, k2, self, params, ell=ell, de_model=de_model) #shape (ntri, n_ell)
-        bsugi = bsugi.flatten()
+        ell = observable.ell if observable.ellwin is None else observable.ellwin
+        bsugi = self.Bell_sugiyama(observable.pair, params, ell, de_model=de_model) #shape (npair, n_ell)
+        bsugi = np.concatenate([bsugi[f'{ell}'] for ell in observable.ell])
+        if observable.xwin is not None:
+            bsugi = observable.wmat @ bsugi 
         return bsugi
 
     def PX_ell_extra(self, k, params, ell, diagram, de_model):
@@ -83,3 +80,41 @@ class COMET(comet, BaseModel):
         for i, ll in enumerate(ell):
             res[f'ell{ll}'] = (2 * ll + 1)/q3 * r_[0, i, :, 0]
         return res
+
+    def Bell_scoccimarro(self, tri, params, ell, de_model):
+        if not isinstance(tri, list):
+            tri_all = tri
+            tri = len(ell) * [tri]
+            idx_inverse = None
+        # tri can be different for each ell
+        else:
+        # use only the unique values, but keep track of the indices to put the results back in the right order
+        # keep indices for each ell
+            tri_all = np.concatenate(tri) # tri is a list of arrays of shape (ntri_ell, 3), tri_all is an array of shape (sum(ntri_ell), 3)
+            tri_all, idx_inverse = np.unique(tri_all, axis=0, return_inverse=True) 
+            idx_ell = [np.sum([len(t) for t in tri[:i]]) for i in range(len(tri)+1)] # idx_ell[i] is the starting index of tri[i] in tri_all
+
+        k1, k2, k3 = tri_all[:, 0], tri_all[:, 1], tri_all[:, 2]
+        bscocc = bispectrum_scoccimarro_proj(k1, k2, k3, self, params, ell=ell, de_model=de_model) #shape (ntri, n_ell)
+        res = {}
+        for i, ll in enumerate(ell):
+            res[f'ell{ll}'] = bscocc[f'ell{ll}'][idx_inverse[idx_ell[i]:idx_ell[i]+len(tri[i])]] if idx_inverse is not None else bscocc[f'ell{ll}']
+        return res
+    
+    def Bell_sugiyama(self, pair, params, ell, de_model):
+        # same as above..
+        if not isinstance(pair, list):
+            pair_all = pair
+            pair = len(ell) * [pair]
+            idx_inverse = None
+        else:
+            pair_all = np.concatenate(pair)
+            pair_all, idx_inverse = np.unique(pair_all, axis=0, return_inverse=True) 
+            idx_ell = [int(np.sum([len(p) for p in pair[:i]])) for i in range(len(pair)+1)]
+        k1, k2 = pair_all[:, 0], pair_all[:, 1] 
+        bsugi = bispectrum_sugiyama_proj(k1, k2, self, params, ell=ell, de_model=de_model) #shape (npair, n_ell)
+        res = {}
+        for i, ll in enumerate(ell):
+            res[f'{ll}'] = bsugi[f'{ll}'][idx_inverse][idx_ell[i]:idx_ell[i+1]] if idx_inverse is not None else bsugi[f'{ll}']
+        return res
+        

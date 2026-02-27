@@ -2,8 +2,9 @@ import numpy as np
 from scipy.special import legendre, factorial, lpmv
 from sympy.physics.wigner import wigner_3j
 
-def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, nbar=1.0, **kwargs):
+def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs):
     params = emu.params
+    nbar = emu.nbar
     b1, b2, g2, f = params['b1'], params['b2'], params['g2'], params['f']
     # Apply AP effect
     qpar, qperp = params['q_lo'], params['q_tr']
@@ -56,7 +57,7 @@ def stoch_term(ki, mui, b1, f, avir, sv, MB0, NP0):
     t = t * w_B_infty(lambda2, avir, sv)
     return t
 
-def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[0, 2], nbar=1.0, **kwargs):
+def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[0, 2], **kwargs):
     nmu = kwargs.pop('nmu', 20)
     nphi = kwargs.pop('nphi', 20)
     mu, w_mu = np.polynomial.legendre.leggauss(nmu)
@@ -72,7 +73,7 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[0, 2], nbar=
     mu12 = np.clip(mu12, -1, 1)
     mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi)
     # reshape everything to be (ntri, nmu, nphi)
-    bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, nbar=nbar, **kwargs) # shape (ntri, nmu, nphi)
+    bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs) # shape (ntri, nmu, nphi)
     res = {}
     for ll in ell:
         lell = legendre(ll)(mu1) # shape (1, nmu, 1)
@@ -81,12 +82,12 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[0, 2], nbar=
         res[f'ell{ll}'] = bell
     return res
 
-def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=['000'], nbar=1.0, **kwargs):
+def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=['000'], **kwargs):
     # let's use Scoccimarro coordinate system!!
     n = k1.shape[0]
-    nmu1 = kwargs.pop('nmu1', 20) # cos(\omega)
-    nmu12 = kwargs.pop('nmu12', 20) # cos(\theta_{12})
-    nphi = kwargs.pop('nphi', 20) # \phi
+    nmu1 = kwargs.pop('nmu1', 5) # cos(\omega)
+    nmu12 = kwargs.pop('nmu12', 5) # cos(\theta_{12})
+    nphi = kwargs.pop('nphi', 10) # \phi
     mu1, w_mu1 = np.polynomial.legendre.leggauss(nmu1)
     mu12, w_mu12 = np.polynomial.legendre.leggauss(nmu12)
     phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)
@@ -104,7 +105,7 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=['000'], nbar=1.0, *
     # get mu2 using the Scoccimarro coordinate system
     mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi) # shape (n, nmu1, nmu12, nphi)
     
-    bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, nbar=nbar, **kwargs) # shape (n, nmu1, nmu2, nphi)
+    bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs) # shape (n, nmu1, nmu2, nphi)
     proj_ops = get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_phi, mu1, mu12, phi)
     
     # Reshape bfull to (n, nmu1 * nmu12 * nphi) for a blazing fast BLAS matrix-vector product
@@ -150,9 +151,10 @@ def get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_phi, mu1, 
     _PROJ_CACHE[cache_key] = res_ops
     return res_ops
 
-def BX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, nbar=1.0, **kwargs):
+def BX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, **kwargs):
     # only supporting NP0, NB0 and MB0\
     params = emu.params
+    nbar = emu.nbar
     b1, f, avir, sv = params['b1'], params['f'], params['avir'], params['sv']
     qpar, qperp = params['q_lo'], params['q_tr']
     qiso6 = qpar**2 * qperp**4
@@ -184,7 +186,7 @@ def BX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, nbar=1.0, **kwargs):
     bstoch = bstoch / qiso6
     return bstoch
 
-def BX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, nbar=1.0, **kwargs):
+def BX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
     nmu, nphi = kwargs.pop('nmu', 20), kwargs.pop('nphi', 20)
     mu, w_mu = np.polynomial.legendre.leggauss(nmu)
     phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)
@@ -195,7 +197,7 @@ def BX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, nbar=1.0, **
     mu12 = get_dot_cosine(k1, k2, k3)
     mu12 = np.clip(mu12, -1, 1)
     mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi)
-    bfull = BX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, nbar=nbar, **kwargs) # shape (ntri, nmu, nphi)
+    bfull = BX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, **kwargs) # shape (ntri, nmu, nphi)
     if diagram == 'B_NB0':
         b0 = np.ones(k1.shape[0]) * bfull[0, 0, 0]
         res = {f'ell{ll}': b0 if ll == 0 else np.zeros_like(b0) for ll in ell}
@@ -209,7 +211,7 @@ def BX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, nbar=1.0, **
     return res
 
 
-def BX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, nbar=1.0, **kwargs):
+def BX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, **kwargs):
     nmu1, nmu12, nphi = kwargs.pop('nmu1', 20), kwargs.pop('nmu12', 20), kwargs.pop('nphi', 20)
     mu1, w_mu1 = np.polynomial.legendre.leggauss(nmu1)
     mu12, w_mu12 = np.polynomial.legendre.leggauss(nmu12)
@@ -227,7 +229,6 @@ def BX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, nbar=1.0, **kwargs)
     mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi) # shape (ntri, nmu1, nmu12, nphi)
     
     bfull = BX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram=diagram,
-                  nbar=nbar,
                   **kwargs) # shape (ntri, nmu1, nmu12, nphi)
     if diagram == 'B_NB0':
         b0 = np.ones(k1.shape[0]) * bfull[0, 0, 0, 0]

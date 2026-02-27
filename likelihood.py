@@ -1,6 +1,7 @@
 import numpy as np
 from observables import Observable, PowerSpectrumMultipoles
 import params
+from bispectrum import BX_ell_scoccimarro, BX_ell_sugiyama
 
 class Likelihood:
     """Base class for likelihoods"""
@@ -145,7 +146,7 @@ class Likelihood:
             # chi2 = delta.T @ self.icov @ delta
             chi2 = get_bCib(self.lcov, delta)
         else:
-            dm = self.get_design_matrix_ps(params)
+            dm = self.get_design_matrix_pk(params)
             if not self.am_sample:
                 chi2 = self.marg_chi2(delta, self.lcov, self.am_params_0, self.am_inv_cov, self.am_det_cov, dm)
             else:
@@ -183,7 +184,7 @@ class Likelihood:
             return chi2, cond_mean, lamb_inv
         return chi2
     
-    def get_design_matrix_ps(self, params):
+    def get_design_matrix_pk(self, params):
         comet_params = self.params.get_comet_dict(params)
         design_mat = np.zeros((len(self.y), len(self.am_params)))
         xeval = self.xwin if self.xwin is not None else self.x
@@ -216,6 +217,61 @@ class Likelihood:
             m_vec = np.concatenate(m_list)
             design_mat[:, i] = m_vec
         return design_mat
+    
+    def get_design_matrix_bk(self, params, base='soccimarro'):
+        comet_params = self.params.get_comet_dict(params)
+        design_mat = np.zeros((len(self.y), len(self.am_params)))
+        xeval = self.xwin if self.xwin is not None else self.x
+        convol = self.xwin is not None
+    
+        for i, param in enumerate(self.am_params):
+            if param.endswith('_r'):
+                param_base = param.replace('_r', '')
+                factor = self.params.get_reparam_factor(params, param)
+            else:
+                param_base = param
+                factor = 1.0
+
+            diag_to_marg = 'B_' + param_base
+            if base == 'soccimarro':
+                bx_ell = BX_ell_scoccimarro(self.observable.tri[:, 0], self.observable.tri[:, 1], self.observable.tri[:, 2],
+                                            self.emu, comet_params, ell=self.observable.ell, diagram=diag_to_marg, de_model=self.de_model, nbar=getattr(self.observable, 'nbar', None))
+                m_list = [factor * bx_ell[f'ell{l}'] for l in self.observable.ell]
+            elif base == 'sugiyama':
+                bx_ell = BX_ell_sugiyama(self.observable.k1, self.observable.k2, self.emu, comet_params, ell=self.observable.ell, diagram=diag_to_marg, de_model=self.de_model, nbar=getattr(self.observable, 'nbar', None))
+                m_list = [factor * bx_ell[f'{l}'] for l in self.observable.ell]
+            if convol:
+                m_list = [self.observable.wmat @ mli for mli in m_list]
+            m_vec = np.concatenate(m_list)
+            design_mat[:, i] = m_vec
+        return design_mat
+
+    def join_design_matrices(self, dm_pk, dm_bk, NP0_pk_idx=None, NP0_bk_idx=None):
+        ny_pk = dm_pk.shape[0]
+        ny_bk = dm_bk.shape[0]
+        ny = ny_pk + ny_bk
+        nam_pk = dm_pk.shape[1]
+        nam_bk = dm_bk.shape[1]
+        if NP0_pk_idx is None and NP0_bk_idx is None:
+            dm = np.zeros((ny, nam_pk + nam_bk))
+            dm[:ny_pk, :nam_pk] = dm_pk
+            dm[ny_pk:, nam_pk:] = dm_bk
+        else:
+            if NP0_pk_idx is None or NP0_bk_idx is None:
+                raise ValueError("Both NP0_pk_idx and NP0_bk_idx must be provided together.")
+            dm = np.zeros((ny, nam_pk + nam_bk - 1))
+            NP0_idx = NP0_pk_idx  # Use NP0_pk_idx as the index for the shared parameter in the combined design matrix
+            # Extract the dm_bk column corresponding to NP0
+            dm_bk_NP0 = dm_bk[:, NP0_bk_idx] # shape (ny_bk,)
+            dm_bk = np.delete(dm_bk, NP0_bk_idx, axis=1) # shape (ny_bk, nam_bk - 1)
+            # Fill pk part of the design matrix
+            dm[:ny_pk, :nam_pk] = dm_pk
+            # Fill bk part of the design matrix
+            dm[ny_pk:, nam_pk:] = dm_bk
+            # Fill the bk part to the NP0 column of the design matrix
+            dm[ny_pk:, NP0_idx] = dm_bk_NP0
+        return dm
+
 
     def add_conditional_prior(self, conditional_prior):
         """Add a conditional prior to the likelihood. The conditional_prior should be a function that takes the full parameter vector
