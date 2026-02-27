@@ -118,7 +118,7 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=['000'], **kwargs):
 
 _PROJ_CACHE = {}
 
-def get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_phi, mu1, mu12, phi, h2=True, cache=True):
+def get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_phi, mu1, mu12, phi, cache=True):
     """Fetches or computes the projection operator for a given grid configuration."""
     cache_key = (nmu1, nmu12, nphi, tuple(ell))
     
@@ -130,8 +130,6 @@ def get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_phi, mu1, 
         l1, l2, L = map(int, ll)
         proj_operator = np.zeros((1, nmu1, nmu12, nphi), dtype=complex) # Match broadcast shape
         h = float(wigner_3j(l1, l2, L, 0, 0, 0).evalf())
-        if h2:
-            h = h**2
         if h == 0:
             continue
 
