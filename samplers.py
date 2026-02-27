@@ -158,3 +158,17 @@ class MinuitMinimizer(BaseSampler):
             self.m.hesse()
             
         return self.m
+    
+    def get_map(self, return_am=True):
+        """Return the best-fit parameters and their uncertainties"""
+        if not self.m.valid:
+            raise RuntimeError("Minimization did not converge. Check the fit status.")
+        
+        best_fit = {name: self.m.values[name] for name in self.sampled_param_names}
+        uncertainties = {name: self.m.errors[name] for name in self.sampled_param_names}
+        if return_am and self.likelihood.am_params is not None:
+            full_dict = self.params.get_full_dict(best_fit)
+            self.likelihood.am_sample_mode = 'map'
+            self.likelihood.get_chi2(full_dict)  # Update AM params to best-fit values
+            best_fit.update({name: full_dict[name] for name in self.likelihood.am_params}) 
+        return best_fit, uncertainties
