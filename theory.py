@@ -57,12 +57,20 @@ class COMET(comet, BaseModel):
         return bsugi
 
     def PX_ell_extra(self, k, params, ell, diagram, de_model):
+        if not isinstance(k, list):
+            k_all = k
+            k = len(ell) * [k]
+            idx_inverse = None
+        else:
+            k_all = np.concatenate(k)
+            k_all, idx_inverse = np.unique(k_all, return_inverse=True) 
+            idx_ell = [np.sum([len(kk) for kk in k[:i]]) for i in range(len(k)+1)]
         mu = self.gl_x
         mu2 = self.gl_x2
         APfac = np.sqrt(
             np.divide.outer(mu2, self.params['q_lo']**2) \
             + np.divide.outer(1.0 - mu2, self.params['q_tr']**2))
-        kp = np.multiply.outer(k, APfac)
+        kp = np.multiply.outer(k_all, APfac)
         mup = np.divide.outer(mu, self.params['q_lo'])/APfac
 
         p2d = -0.5 * self.PX_2d(kp, mup, params, 'Pctr_c0', de_model=de_model)
@@ -79,6 +87,8 @@ class COMET(comet, BaseModel):
                                 self.gl_weights) 
         for i, ll in enumerate(ell):
             res[f'ell{ll}'] = (2 * ll + 1)/q3 * r_[0, i, :, 0]
+            if idx_inverse is not None:
+                res[f'ell{ll}'] = res[f'ell{ll}'][idx_inverse][idx_ell[i]:idx_ell[i]+len(k[i])]
         return res
 
     def Bell_scoccimarro(self, tri, params, ell, de_model):
