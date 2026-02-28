@@ -211,7 +211,7 @@ class BispectrumSugiyamaMultipoles(Observable):
         
 
 class JointObservable(Observable):
-    def __init__(self, *observables, cov=None, cov_Mpc_units=False):
+    def __init__(self, *observables, cov=None, cov_Mpc_units=False, nmocks_cov=None):
         self.observables = observables # this is a list of Observable instances
         # list of x and y for each observable
         x = []
@@ -239,7 +239,7 @@ class JointObservable(Observable):
                 cov[:obs1.n_data, obs1.n_data:] /= hfact1 * hfact2
                 cov[obs1.n_data:, :obs1.n_data] /= hfact1 * hfact2
                 
-        super().__init__(x, y, cov=cov, nbar=obs1.nbar, cosmo_fid=obs1.cosmo_fid)
+        super().__init__(x, y, cov=cov, nbar=obs1.nbar, cosmo_fid=obs1.cosmo_fid, nmocks=nmocks_cov)
 
     def get_block_cov(self, cov1, cov2):
         return np.block([[cov1, np.zeros((cov1.shape[0], cov2.shape[1]))], [np.zeros((cov2.shape[0], cov1.shape[1])), cov2]])
