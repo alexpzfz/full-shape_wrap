@@ -201,12 +201,14 @@ class Likelihood:
             return self.join_design_matrices(dm_pk, dm_bk)
     
     def get_design_matrix_pk(self, params, observable):
+        _bispec_only_params = ['NB0', 'MB0']
+        am_params = [param for param in self.am_params if param not in _bispec_only_params and param.replace('_r', '') not in _bispec_only_params]
         comet_params = self.params.get_comet_dict(params)
-        design_mat = np.zeros((len(observable.y), len(self.am_params)))
+        design_mat = np.zeros((observable.n_data, len(am_params)))
         xeval = observable.xwin if observable.xwin is not None else observable.x
         elleval = observable.ell if observable.xwin is None else observable.ellwin
         convol = observable.xwin is not None
-        for i, param in enumerate(self.am_params):
+        for i, param in enumerate(am_params):
             if param.endswith('_r'):
                 param_base = param.replace('_r', '')
                 factor = self.params.get_reparam_factor(params, param)
@@ -236,12 +238,14 @@ class Likelihood:
         return design_mat
     
     def get_design_matrix_bk(self, params, observable):
+        _allowed_params = ['NP0', 'NB0', 'MB0']
+        am_params = [param for param in self.am_params if param in _allowed_params or param.replace('_r', '') in _allowed_params]
         comet_params = self.params.get_comet_dict(params)
-        design_mat = np.zeros((len(observable.y), len(self.am_params)))
+        design_mat = np.zeros((observable.n_data, len(am_params)))
         xeval = observable.xwin if observable.xwin is not None else observable.x
         convol = observable.xwin is not None
     
-        for i, param in enumerate(self.am_params):
+        for i, param in enumerate(am_params):
             if param.endswith('_r'):
                 param_base = param.replace('_r', '')
                 factor = self.params.get_reparam_factor(params, param)
@@ -252,7 +256,7 @@ class Likelihood:
             diag_to_marg = 'B_' + param_base
             if observable.__class__.__name__ == 'BispectrumScoccimarroMultipoles':
                 bx_ell = self.emu.BX_ell_scoccimarro(xeval, comet_params, observable.ell, diagram=diag_to_marg, de_model=self.de_model)
-                m_list = [factor * bx_ell[f'ell{l}'] for l in self.observable.ell]
+                m_list = [factor * bx_ell[f'ell{l}'] for l in observable.ell]
             elif observable.__class__.__name__ == 'BispectrumSugiyamaMultipoles':
                 bx_ell = self.emu.BX_ell_sugiyama(xeval, comet_params, ell=observable.ell, diagram=diag_to_marg, de_model=self.de_model)
                 m_list = [factor * bx_ell[f'{l}'] for l in observable.ell]
