@@ -266,7 +266,7 @@ class Likelihood:
 
     def join_design_matrices(self, dm_pk, dm_bk):
         _bispec_only_params = ['NB0', 'MB0']
-        am_pk = [param for param in self.am_params if param in _bispec_only_params or param.replace('_r', '') in _bispec_only_params]
+        am_pk = [param for param in self.am_params if  param not in _bispec_only_params and param.replace('_r', '') not in _bispec_only_params]
         NP0_pk_idx = None
         if 'NP0' in am_pk:
             NP0_pk_idx = am_pk.index('NP0')
