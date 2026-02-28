@@ -64,17 +64,17 @@ class COMET(comet, BaseModel):
         else:
             k_all = np.concatenate(k)
             k_all, idx_inverse = np.unique(k_all, return_inverse=True) 
-            idx_ell = [np.sum([len(kk) for kk in k[:i]]) for i in range(len(k)+1)]
+            idx_ell = [int(np.sum([len(kk) for kk in k[:i]])) for i in range(len(k)+1)]
         mu = self.gl_x
         mu2 = self.gl_x2
         APfac = np.sqrt(
             np.divide.outer(mu2, self.params['q_lo']**2) \
             + np.divide.outer(1.0 - mu2, self.params['q_tr']**2))
-        kp = np.multiply.outer(k_all, APfac)
+        kp = np.multiply.outer(k_all, APfac) # shape (nk, nmu, 1)
         mup = np.divide.outer(mu, self.params['q_lo'])/APfac
 
         p2d = -0.5 * self.PX_2d(kp, mup, params, 'Pctr_c0', de_model=de_model)
-        p2d = p2d[0]
+        p2d = p2d[0] # shape (nk, nmu, 1)
         q3 = self.params['q_lo'] * self.params['q_tr']**2
 
         prefact_dict = {'Pctr_a0': self.params['b1'], 'Pctr_a2': self.params['f'] * mup**2, 'Pctr_a4': self.params['f'] * mup**4}
@@ -82,11 +82,11 @@ class COMET(comet, BaseModel):
         wdamping = self._W_kurt(kp, mup)
         res = {}
         integrand = kaiser_fact * prefact_dict[diagram] * p2d * wdamping
-        legendre = eval_legendre.outer(ell, mu)
-        r_ = 0.5 * np.einsum("aebc,db,b->adec", integrand, legendre,
+        legendre = eval_legendre.outer(ell, mu) # shape (n_ell, nmu)
+        r_ = 0.5 * np.einsum("ebc,db,b->dec", integrand, legendre,
                                 self.gl_weights) 
         for i, ll in enumerate(ell):
-            res[f'ell{ll}'] = (2 * ll + 1)/q3 * r_[0, i, :, 0]
+            res[f'ell{ll}'] = (2 * ll + 1)/q3 * r_[i, :, 0]
             if idx_inverse is not None:
                 res[f'ell{ll}'] = res[f'ell{ll}'][idx_inverse][idx_ell[i]:idx_ell[i]+len(k[i])]
         return res
