@@ -151,7 +151,7 @@ def get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_phi, mu1, 
     _PROJ_CACHE[cache_key] = res_ops
     return res_ops
 
-def BX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, **kwargs):
+def bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, **kwargs):
     # only supporting NP0, NB0 and MB0\
     params = emu.params
     nbar = emu.nbar
@@ -186,7 +186,7 @@ def BX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, **kwargs):
     bstoch = bstoch / qiso6
     return bstoch
 
-def BX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
+def bX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
     nmu, nphi = kwargs.pop('nmu', 20), kwargs.pop('nphi', 20)
     mu, w_mu = np.polynomial.legendre.leggauss(nmu)
     phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)
@@ -197,7 +197,7 @@ def BX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
     mu12 = get_dot_cosine(k1, k2, k3)
     mu12 = np.clip(mu12, -1, 1)
     mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi)
-    bfull = BX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, **kwargs) # shape (ntri, nmu, nphi)
+    bfull = bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, **kwargs) # shape (ntri, nmu, nphi)
     if diagram == 'B_NB0':
         b0 = np.ones(k1.shape[0]) * bfull[0, 0, 0]
         res = {f'ell{ll}': b0 if ll == 0 else np.zeros_like(b0) for ll in ell}
@@ -211,7 +211,7 @@ def BX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
     return res
 
 
-def BX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, **kwargs):
+def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, **kwargs):
     nmu1, nmu12, nphi = kwargs.pop('nmu1', 5), kwargs.pop('nmu12', 5), kwargs.pop('nphi', 10)
     mu1, w_mu1 = np.polynomial.legendre.leggauss(nmu1)
     mu12, w_mu12 = np.polynomial.legendre.leggauss(nmu12)
@@ -228,7 +228,7 @@ def BX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, **kwargs):
     k3 = np.sqrt(k1**2 + k2**2 + 2 * k1 * k2 * mu12) # shape (ntri, 1, nmu12, 1)
     mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi) # shape (ntri, nmu1, nmu12, nphi)
     
-    bfull = BX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram=diagram,
+    bfull = bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram=diagram,
                   **kwargs) # shape (ntri, nmu1, nmu12, nphi)
     if diagram == 'B_NB0':
         b0 = np.ones(k1.shape[0]) * bfull[0, 0, 0, 0]

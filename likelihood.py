@@ -1,13 +1,18 @@
 import numpy as np
 from observables import Observable, PowerSpectrumMultipoles
 import params
-from bispectrum import BX_ell_scoccimarro, BX_ell_sugiyama
 
 class Likelihood:
     """Base class for likelihoods"""
     def __init__(self, observable, emu, params, am_params=None,
                  am_sample = True, am_from_comet=False, conditional_prior=None):
         self.observable = observable
+        if self.observable.__class__.__name__ == 'JointObservable':
+            self.observables = observable.observables
+        else:
+            self.observables = [observable]
+        self.nobservables = len(self.observables)
+    
         self.cov = self.observable.cov
         self.nmocks_cov = observable.nmocks_cov
         if self.nmocks_cov is not None:
@@ -18,8 +23,8 @@ class Likelihood:
         self.params = params
         self.params.z = observable.cosmo_fid['z']  # Set redshift in params for use in derived parameters if needed
         self.de_model = self.params.de_model
-        self.x = observable.x
-        self.xwin = observable.xwin
+        # self.x = observable.x
+        # self.xwin = observable.xwin
         self.y = observable.get_flatten()
         self.emu.define_fiducial_cosmology(observable.cosmo_fid)
         if getattr(self.observable, 'nbar', None) is not None:
@@ -61,13 +66,13 @@ class Likelihood:
                     
         
             # # for the moment we use comet's chi2 function for AM
-            if am_from_comet:
-                n_realizations = observable.nmocks_cov if observable.nmocks_cov is not None else None
-                theory_cov = True if self.nmocks_cov is None else False
-                emu.define_data_set(obs_id='pk', bins=observable._k, signal=observable._Pell.T, cov=observable._cov,
-                                    theory_cov=theory_cov, n_realizations=n_realizations, zeff=observable.cosmo_fid['z'],
-                                    fiducial_cosmology=observable.cosmo_fid)
-                self.am_priors = {am_param: self.params.parameters[am_param].prior for am_param in self.am_params}
+            # if am_from_comet:
+            #     n_realizations = observable.nmocks_cov if observable.nmocks_cov is not None else None
+            #     theory_cov = True if self.nmocks_cov is None else False
+            #     emu.define_data_set(obs_id='pk', bins=observable._k, signal=observable._Pell.T, cov=observable._cov,
+            #                         theory_cov=theory_cov, n_realizations=n_realizations, zeff=observable.cosmo_fid['z'],
+            #                         fiducial_cosmology=observable.cosmo_fid)
+            #     self.am_priors = {am_param: self.params.parameters[am_param].prior for am_param in self.am_params}
 
             # self.do_am = True
             self.do_am = True
@@ -146,7 +151,7 @@ class Likelihood:
             # chi2 = delta.T @ self.icov @ delta
             chi2 = get_bCib(self.lcov, delta)
         else:
-            dm = self.get_design_matrix_pk(params)
+            dm = self.get_design_matrix(params)
             if not self.am_sample:
                 chi2 = self.marg_chi2(delta, self.lcov, self.am_params_0, self.am_inv_cov, self.am_det_cov, dm)
             else:
@@ -184,11 +189,23 @@ class Likelihood:
             return chi2, cond_mean, lamb_inv
         return chi2
     
-    def get_design_matrix_pk(self, params):
+
+    def get_design_matrix(self, params):
+        if self.observable.__class__.__name__ == 'PowerSpectrumMultipoles':
+            return self.get_design_matrix_pk(params, self.observable)
+        elif 'Bispectrum' in self.observable.__class__.__name__:
+            return self.get_design_matrix_bk(params, self.observable)
+        elif self.observable.__class__.__name__ == 'JointObservable':
+            dm_pk = self.get_design_matrix_pk(params, self.observables[0])
+            dm_bk = self.get_design_matrix_bk(params, self.observables[1])
+            return self.join_design_matrices(dm_pk, dm_bk)
+    
+    def get_design_matrix_pk(self, params, observable):
         comet_params = self.params.get_comet_dict(params)
-        design_mat = np.zeros((len(self.y), len(self.am_params)))
-        xeval = self.xwin if self.xwin is not None else self.x
-        convol = self.xwin is not None
+        design_mat = np.zeros((len(observable.y), len(self.am_params)))
+        xeval = observable.xwin if observable.xwin is not None else observable.x
+        elleval = observable.ell if observable.xwin is None else observable.ellwin
+        convol = observable.xwin is not None
         for i, param in enumerate(self.am_params):
             if param.endswith('_r'):
                 param_base = param.replace('_r', '')
@@ -202,27 +219,27 @@ class Likelihood:
                 bx = self.emu._get_bias_coeff_for_AM(diag_to_marg)
                 
                 bx = bx * factor# Apply reparametrization factor if needed
-                px_ell = self.emu.PX_ell(xeval, comet_params, self.observable.ell, diag_to_marg, de_model=self.de_model)
+                px_ell = self.emu.PX_ell(xeval, comet_params, elleval, diag_to_marg, de_model=self.de_model)
             else:
                 diag_to_marg = self.emu._extra_diagrams_to_marg[param_base]
                 bx = factor # Apply reparametrization factor if needed
-                px_ell = self.emu.PX_ell_extra(xeval, comet_params, self.observable.ell, diag_to_marg, de_model=self.de_model)
+                px_ell = self.emu.PX_ell_extra(xeval, comet_params, elleval, diag_to_marg, de_model=self.de_model)
             nx = px_ell[f'ell0'].ndim
             if nx == 1:
-                m_list = [bx * px_ell[f'ell{l}'] for l in self.observable.ell]
+                m_list = [bx * px_ell[f'ell{l}'] for l in observable.ell]
             elif nx > 1:
-                m_list = [np.sum(bx * px_ell[f'ell{l}'], axis=1) for l in self.observable.ell] 
+                m_list = [np.sum(bx * px_ell[f'ell{l}'], axis=1) for l in observable.ell] 
             m_vec = np.concatenate(m_list)
             if convol:
-                m_vec = self.observable.wmat @ m_vec
+                m_vec = observable.wmat @ m_vec
             design_mat[:, i] = m_vec
         return design_mat
     
-    def get_design_matrix_bk(self, params, base='soccimarro'):
+    def get_design_matrix_bk(self, params, observable):
         comet_params = self.params.get_comet_dict(params)
-        design_mat = np.zeros((len(self.y), len(self.am_params)))
-        xeval = self.xwin if self.xwin is not None else self.x
-        convol = self.xwin is not None
+        design_mat = np.zeros((len(observable.y), len(self.am_params)))
+        xeval = observable.xwin if observable.xwin is not None else observable.x
+        convol = observable.xwin is not None
     
         for i, param in enumerate(self.am_params):
             if param.endswith('_r'):
@@ -233,20 +250,31 @@ class Likelihood:
                 factor = 1.0
 
             diag_to_marg = 'B_' + param_base
-            if base == 'soccimarro':
-                bx_ell = BX_ell_scoccimarro(self.observable.tri[:, 0], self.observable.tri[:, 1], self.observable.tri[:, 2],
-                                            self.emu, comet_params, ell=self.observable.ell, diagram=diag_to_marg, de_model=self.de_model, nbar=getattr(self.observable, 'nbar', None))
+            if observable.__class__.__name__ == 'BispectrumScoccimarroMultipoles':
+                bx_ell = self.emu.BX_ell_scoccimarro(xeval, comet_params, observable.ell, diagram=diag_to_marg, de_model=self.de_model)
                 m_list = [factor * bx_ell[f'ell{l}'] for l in self.observable.ell]
-            elif base == 'sugiyama':
-                bx_ell = BX_ell_sugiyama(self.observable.k1, self.observable.k2, self.emu, comet_params, ell=self.observable.ell, diagram=diag_to_marg, de_model=self.de_model, nbar=getattr(self.observable, 'nbar', None))
-                m_list = [factor * bx_ell[f'{l}'] for l in self.observable.ell]
-            if convol:
-                m_list = [self.observable.wmat @ mli for mli in m_list]
+            elif observable.__class__.__name__ == 'BispectrumSugiyamaMultipoles':
+                bx_ell = self.emu.BX_ell_sugiyama(xeval, comet_params, ell=observable.ell, diagram=diag_to_marg, de_model=self.de_model)
+                m_list = [factor * bx_ell[f'{l}'] for l in observable.ell]
             m_vec = np.concatenate(m_list)
             design_mat[:, i] = m_vec
         return design_mat
 
-    def join_design_matrices(self, dm_pk, dm_bk, NP0_pk_idx=None, NP0_bk_idx=None):
+    def join_design_matrices(self, dm_pk, dm_bk):
+        _bispec_only_params = ['NB0', 'MB0']
+        am_pk = [param for param in self.am_params if param in _bispec_only_params or param.replace('_r', '') in _bispec_only_params]
+        NP0_pk_idx = None
+        if 'NP0' in am_pk:
+            NP0_pk_idx = am_pk.index('NP0')
+        elif 'NP0_r' in am_pk:
+            NP0_pk_idx = am_pk.index('NP0_r')
+        am_bk = [param for param in self.am_params if param not in am_pk or (param.replace('_r', '') == 'NP0')]
+        NP0_bk_idx = None
+        if 'NP0' in am_bk:
+            NP0_bk_idx = am_bk.index('NP0')
+        elif 'NP0_r' in am_bk:
+            NP0_bk_idx = am_bk.index('NP0_r')
+         
         ny_pk = dm_pk.shape[0]
         ny_bk = dm_bk.shape[0]
         ny = ny_pk + ny_bk

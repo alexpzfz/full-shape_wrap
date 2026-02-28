@@ -67,6 +67,8 @@ _stochastic_params = [
     Parameter(name="NP0", value=0.0, prior=(-1., 3.), prior_type="uniform", fixed=True, latex=r"N^P_0"),
     Parameter(name="NP20", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"N^P_{2,0}"),
     Parameter(name="NP22", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"N^P_{2,2}"),
+    Parameter(name="NB0", value=0.0, prior=(-1., 3.), prior_type="uniform", fixed=True, latex=r"N^B_0"),
+    Parameter(name="MB0", value=0.0, prior=(-3., 3.), prior_type="uniform", fixed=True, latex=r"M^B_0"),
 ]
 
 
@@ -440,7 +442,7 @@ class Params:
             for name in self.stochastic_params.keys():
                 name_reparam = name + '_r'
                 latex_reparam = add_tilde_to_latex(self.parameters[name].latex)
-                self.add_sampled_param(name_reparam, value=0.0, prior=(-1e4, 1e4), prior_type="uniform", latex=latex_reparam)
+                self.add_sampled_param(name_reparam, value=0.0, prior=(-1, 1), prior_type="uniform", latex=latex_reparam)
                 self.set_derived_param(name, self._derived_from_name(name_reparam), latex=self.parameters[name].latex, exported=True)
 
 def add_tilde_to_latex(latex_str):

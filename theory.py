@@ -1,7 +1,7 @@
 from comet import comet
 import numpy as np
 from observables import PowerSpectrumMultipoles, BispectrumScoccimarroMultipoles, BispectrumSugiyamaMultipoles, JointObservable
-from bispectrum import bispectrum_scoccimarro_proj, bispectrum_sugiyama_proj
+from bispectrum import bispectrum_scoccimarro_proj, bispectrum_sugiyama_proj, bX_5d, bX_ell_scoccimarro, bX_ell_sugiyama
 from scipy.special import eval_legendre
 
 class BaseModel:
@@ -116,5 +116,38 @@ class COMET(comet, BaseModel):
         res = {}
         for i, ll in enumerate(ell):
             res[f'{ll}'] = bsugi[f'{ll}'][idx_inverse][idx_ell[i]:idx_ell[i+1]] if idx_inverse is not None else bsugi[f'{ll}']
+        return res
+
+    def BX_ell_scoccimarro(self, tri, params, ell, diagram, de_model):
+        if not isinstance(tri, list):
+            tri_all = tri
+            tri = len(ell) * [tri]
+            idx_inverse = None
+        # tri can be different for each ell
+        else:
+            tri_all = np.concatenate(tri) # tri is a list of arrays of shape (ntri_ell, 3), tri_all is an array of shape (sum(ntri_ell), 3)
+            tri_all, idx_inverse = np.unique(tri_all, axis=0, return_inverse=True) 
+            idx_ell = [np.sum([len(t) for t in tri[:i]]) for i in range(len(tri)+1)] # idx_ell[i] is the starting index of tri[i] in tri_all
+        k1, k2, k3 = tri_all[:, 0], tri_all[:, 1], tri_all[:, 2]
+        bX_scocc = bX_ell_scoccimarro(k1, k2, k3, self, params, ell=ell, diagram=diagram, de_model=de_model) #shape (ntri, n_ell)
+        res = {}
+        for i, ll in enumerate(ell):
+            res[f'ell{ll}'] = bX_scocc[f'ell{ll}'][idx_inverse][idx_ell[i]:idx_ell[i]+len(tri[i])] if idx_inverse is not None else bX_scocc[f'ell{ll}']
+        return res
+    
+    def BX_ell_sugiyama(self, pair, params, ell, diagram, de_model):
+        if not isinstance(pair, list):
+            pair_all = pair
+            pair = len(ell) * [pair]
+            idx_inverse = None
+        else:
+            pair_all = np.concatenate(pair)
+            pair_all, idx_inverse = np.unique(pair_all, axis=0, return_inverse=True) 
+            idx_ell = [int(np.sum([len(p) for p in pair[:i]])) for i in range(len(pair)+1)]
+        k1, k2 = pair_all[:, 0], pair_all[:, 1] 
+        bX_sugi = bX_ell_sugiyama(k1, k2, self, params, ell=ell, diagram=diagram, de_model=de_model) #shape (npair, n_ell)
+        res = {}
+        for i, ll in enumerate(ell):
+            res[f'{ll}'] = bX_sugi[f'{ll}'][idx_inverse][idx_ell[i]:idx_ell[i+1]] if idx_inverse is not None else bX_sugi[f'{ll}']
         return res
         
