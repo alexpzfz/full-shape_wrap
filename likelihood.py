@@ -163,6 +163,8 @@ class Likelihood:
     def get_loglike(self, params):
         chi2 = self.get_chi2(params)
         loglike = -0.5 * chi2
+        if np.isnan(loglike):
+            loglike = -np.inf
         return loglike
 
     @staticmethod
