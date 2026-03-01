@@ -38,7 +38,7 @@ class COMET(comet, BaseModel):
         k = observable.k if observable.kwin is None else observable.kwin
         ell = observable.ell if observable.ellwin is None else observable.ellwin
         pell = self.Pell(k, params, ell, de_model=de_model)
-        pell = np.concatenate([pell[f'ell{ell}'] for ell in observable.ell])
+        pell = np.concatenate([pell[f'ell{ll}'] for ll in ell])
         if observable.xwin is not None:
             pell = observable.wmat @ pell
         return pell

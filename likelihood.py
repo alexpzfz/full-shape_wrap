@@ -230,9 +230,9 @@ class Likelihood:
                 px_ell = self.emu.PX_ell_extra(xeval, comet_params, elleval, diag_to_marg, de_model=self.de_model)
             nx = px_ell[f'ell0'].ndim
             if nx == 1:
-                m_list = [bx * px_ell[f'ell{l}'] for l in observable.ell]
+                m_list = [bx * px_ell[f'ell{l}'] for l in elleval]
             elif nx > 1:
-                m_list = [np.sum(bx * px_ell[f'ell{l}'], axis=1) for l in observable.ell] 
+                m_list = [np.sum(bx * px_ell[f'ell{l}'], axis=1) for l in elleval] 
             m_vec = np.concatenate(m_list)
             if convol:
                 m_vec = observable.wmat @ m_vec
