@@ -247,10 +247,10 @@ class Likelihood:
         observable = self.observables[iz]
         comet_params_batched = self.params.get_comet_dict(params)
         is_batched = isinstance(comet_params_batched.get('z'), (list, np.ndarray))
-        if is_batched:
-            comet_params_iz = {k: v[iz] if isinstance(v, (list, np.ndarray)) else v for k, v in comet_params_batched.items()}
-        else:
-            comet_params_iz = comet_params_batched
+        # if is_batched:
+        #     comet_params_iz = {k: v[iz] if isinstance(v, (list, np.ndarray)) else v for k, v in comet_params_batched.items()}
+        # else:
+        #     comet_params_iz = comet_params_batched
         design_mat = np.zeros((observable.n_data, len(am_params_iz)))
         xeval = observable.xwin if observable.xwin is not None else observable.x
         elleval = observable.ell if observable.xwin is None else observable.ellwin
@@ -267,11 +267,17 @@ class Likelihood:
                 bx = self.emu._get_bias_coeff_for_AM(diag_to_marg)
                 
                 bx = bx * factor# Apply reparametrization factor if needed
-                px_ell = self.emu.PX_ell(xeval, comet_params_iz, elleval, diag_to_marg, de_model=self.de_model)
+                px_ell = self.emu.PX_ell(xeval, comet_params_batched, elleval, diag_to_marg, de_model=self.de_model)
+                if is_batched:
+                    px_ell = {key: val[... , iz] for key, val in px_ell.items()}
+                    bx = bx[..., iz]
             else:
                 diag_to_marg = self.emu._extra_diagrams_to_marg[base_name]
                 bx = factor # Apply reparametrization factor if needed
-                px_ell = self.emu.PX_ell_extra(xeval, comet_params_iz, elleval, diag_to_marg, de_model=self.de_model)
+                px_ell = self.emu.PX_ell_extra(xeval, comet_params_batched, elleval, diag_to_marg, de_model=self.de_model)
+                if is_batched:
+                    px_ell = {key: val[... , iz] for key, val in px_ell.items()}
+                    bx = bx[..., iz]
             nx = px_ell[f'ell0'].ndim
             if nx == 1:
                 m_list = [bx * px_ell[f'ell{l}'] for l in elleval]
