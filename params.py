@@ -51,7 +51,9 @@ _bias_params = {"EggScoSmi": [
 
 _bias_params["DesJeoSch_r"] = [Parameter(name=p.name + "r", value=p.value, prior=p.prior, prior_type=p.prior_type, fixed=p.fixed, latex=p.latex + "^r") for p in _bias_params["DesJeoSch"]]
 
-_damping_params = [Parameter(name="avir", value=5.0, prior=(0.0, 10.0), prior_type="uniform", fixed=True, latex=r"a_{\rm vir}")]
+_extra_params = {'VDG_infty': [Parameter(name="avir", value=5.0, prior=(0.0, 10.0), prior_type="uniform", fixed=True, latex=r"a_{\rm vir}")],
+                 'EFT': [Parameter(name="cnlo", value=0.0, prior=(0.0, 10.0), prior_type="gaussian", fixed=True, latex=r"c_{\rm nlo}")]}
+# _damping_params = [Parameter(name="avir", value=5.0, prior=(0.0, 10.0), prior_type="uniform", fixed=True, latex=r"a_{\rm vir}")]
 
 _counterterm_params = {"Comet": [   
     Parameter(name="c0", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"c_0"),
@@ -93,11 +95,11 @@ class Params:
             return res
         
         self.bias_params = duplicate(_bias_params[emu.bias_basis])
-        self.damping_params = duplicate(_damping_params)
+        self.extra_params = duplicate(_extra_params[emu.model])
         self.counterterm_params = duplicate(_counterterm_params[emu.counterterm_basis])
         self.stochastic_params = duplicate(_stochastic_params)
 
-        self.parameters = {**self.cosmo_params, **self.bias_params, **self.damping_params, **self.counterterm_params, **self.stochastic_params}
+        self.parameters = {**self.cosmo_params, **self.bias_params, **self.counterterm_params, **self.stochastic_params, **self.extra_params}
         self.comet_keys = list(set(p.base_name for p in self.parameters.values()))
         
         self.derived_order = [] 
@@ -294,7 +296,7 @@ class Params:
                     comet_dict[p.base_name] = np.array([full_dict[name]]* self.nz) if self.nz > 1 else full_dict[name]
 
             # Map batched nuisance parameters (arrays)
-            for param_group in [self.bias_params, self.damping_params, self.counterterm_params, self.stochastic_params]:
+            for param_group in [self.bias_params, self.counterterm_params, self.stochastic_params, self.extra_params]:
                 base_names = list(set(p.base_name for p in param_group.values()))
                 for base in base_names:
                     vals = [full_dict[f"{base}_{i}"] for i in range(self.nz) if f"{base}_{i}" in full_dict]
