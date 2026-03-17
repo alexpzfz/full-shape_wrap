@@ -7,6 +7,7 @@ from functools import partial
 class Parameter:
     name: str
     value: float
+    base_name: str = ""
     prior: tuple = None  # (min, max)
     prior_type: str = "uniform"  # 'uniform' or 'gaussian'
     fixed: bool = False
@@ -75,30 +76,44 @@ _stochastic_params = [
 
 class Params:
     """Class to handle model parameters"""
-    def __init__(self, emu, coev_params=None):
+    def __init__(self, emu, coev_params=None, z_array=None):
         self.emu = emu
-        self.cosmo_params = {param.name: param for param in _cosmo_params}
-        self.bias_params = {param.name: param for param in _bias_params[emu.bias_basis]}
-        self.damping_params = {param.name: param for param in _damping_params}
-        self.counterterm_params = {param.name: param for param in _counterterm_params[emu.counterterm_basis]}
-        self.stochastic_params = {param.name: param for param in _stochastic_params}
+        self.z_array = z_array if z_array is not None else [None]
+        self.nz = len(self.z_array)
+        self.cosmo_params = {p.name: dataclasses.replace(p, base_name=p.name) 
+                             for p in _cosmo_params}
+
+        def duplicate(param_list):
+            res = {}
+            for iz in range(self.nz):
+                for p in param_list:
+                    new_name = f"{p.name}_{iz}"
+                    new_latex = p.latex + f"_{{{iz}}}" if p.latex else ""
+                    res[new_name] = dataclasses.replace(p, name=new_name, base_name=p.name, latex=new_latex)
+            return res
+        
+        self.bias_params = duplicate(_bias_params[emu.bias_basis])
+        self.damping_params = duplicate(_damping_params)
+        self.counterterm_params = duplicate(_counterterm_params[emu.counterterm_basis])
+        self.stochastic_params = duplicate(_stochastic_params)
+
         self.parameters = {**self.cosmo_params, **self.bias_params, **self.damping_params, **self.counterterm_params, **self.stochastic_params}
-        self.comet_keys = [p.name for p in self.parameters.values()]
+        self.comet_keys = list(set(p.base_name for p in self.parameters.values()))
+        
+        self.derived_order = [] 
         self.coev_params = None
         if coev_params is not None:
-            if not isinstance(coev_params, list):
-                coev_params = [coev_params]
-            self.coev_params = coev_params
+            self.coev_params = coev_params if isinstance(coev_params, list) else [coev_params]
             for name in self.coev_params:
-                assert name in self.bias_params, f"Co-evolution parameter {name} not recognized in bias parameters."
-                if name == "bG2": self.set_derived_param(name, self.bG2_coev)
-                elif name == "bGam3": self.set_derived_param(name, self.bGam3_coev)
-                elif name == "bK2" or name == "bK2t": self.set_derived_param(name, self.bK2_coev)
-                elif name == "btd" or name == "btdt": self.set_derived_param(name, self.btd_coev)
-                else:
-                    raise ValueError(f"Co-evolution for {name} not implemented.")
-        self.derived_order = []
-        self.z = None # Placeholder for redshift, can be set externally if needed for derived parameters
+                for iz in range(self.nz):
+                    suffixed_name = f"{name}_{iz}"
+                    if name == "bG2": self.set_derived_param(suffixed_name, partial(self.bG2_coev, iz=iz))
+                    elif name == "bGam3": self.set_derived_param(suffixed_name, partial(self.bGam3_coev, iz=iz))
+                    elif name == "bK2" or name == "bK2t": self.set_derived_param(suffixed_name, partial(self.bK2_coev, iz=iz))
+                    elif name == "btd" or name == "btdt": self.set_derived_param(suffixed_name, partial(self.btd_coev, iz=iz))
+                    else:
+                        raise ValueError(f"Co-evolution for {name} not implemented.")
+        # self.z = None # Placeholder for redshift, can be set externally if needed for derived parameters
         self.use_reparam = False
         self.reparam_bias_mode = None
         self.reparam_counterterms_mode = None
@@ -172,24 +187,24 @@ class Params:
         return all(self.parameters[name].fixed for name in self.cosmo_params)
     
     @staticmethod
-    def bG2_coev(p):
-        b1 = p["b1"]
+    def bG2_coev(p, iz=0):
+        b1 = p[f"b1_{iz}"]
         return 0.524 - 0.547*b1 + 0.046*b1**2
 
     @staticmethod
-    def bGam3_coev(p):
-        b1 = p["b1"]
-        bG2 = p["bG2"]
+    def bGam3_coev(p, iz=0):
+        b1 = p[f"b1_{iz}"]
+        bG2 = p[f"bG2_{iz}"]
         return -1./6.*(b1-1.) -5./2.*bG2
 
     @staticmethod
-    def bK2_coev(p):
-        b1 = p["b1"]
+    def bK2_coev(p, iz=0):
+        b1 = p[f"b1_{iz}"]
         return -2./7.*(b1 - 1.)
     
     @staticmethod
-    def btd_coev(p):
-        b1 = p["b1"]
+    def btd_coev(p, iz=0):
+        b1 = p[f"b1_{iz}"]
         return 23./42.*(b1 - 1.)
 
 
@@ -264,15 +279,35 @@ class Params:
         #     full_dict['a4'] = full_dict['a4'] * self.sigmaR_ref**2
         return full_dict
     
+    # def get_comet_dict(self, full_dict):
+    #     """Extracts the parameters needed for the comet emulator from the full dict, including derived parameters"""
+    #     comet_dict = {key: full_dict[key] for key in self.comet_keys if key in full_dict}
+    #     comet_dict['z'] = self.z
+    #     return comet_dict
+    
     def get_comet_dict(self, full_dict):
-        """Extracts the parameters needed for the comet emulator from the full dict, including derived parameters"""
-        comet_dict = {key: full_dict[key] for key in self.comet_keys if key in full_dict}
-        comet_dict['z'] = self.z
-        return comet_dict
+            """Extracts and batches parameters for the COMET emulator."""
+            comet_dict = {}
+            # Map shared cosmology
+            for name, p in self.cosmo_params.items():
+                if name in full_dict:
+                    comet_dict[p.base_name] = np.array([full_dict[name]]* self.nz) if self.nz > 1 else full_dict[name]
+
+            # Map batched nuisance parameters (arrays)
+            for param_group in [self.bias_params, self.damping_params, self.counterterm_params, self.stochastic_params]:
+                base_names = list(set(p.base_name for p in param_group.values()))
+                for base in base_names:
+                    vals = [full_dict[f"{base}_{i}"] for i in range(self.nz) if f"{base}_{i}" in full_dict]
+                    if vals:
+                        # Pass as array if multi-z, else scalar
+                        comet_dict[base] = np.array(vals) if self.nz > 1 else vals[0]
+                        
+            comet_dict['z'] = np.array(self.z_array) if self.nz > 1 else self.z_array[0]
+            return comet_dict
     
     def cosmo_dict(self, full_dict):
         cosmo_dict = {key: full_dict[key] for key in self.cosmo_params if key in full_dict}
-        cosmo_dict['z'] = self.z
+        cosmo_dict['z'] = self.z_array
         return cosmo_dict
 
     def set_param_value(self, name, value):
@@ -321,9 +356,9 @@ class Params:
             raise KeyError(f"Parameter {name} not found.")
 
 
-    def get_AP_parameters(self, basis='par_perp'):
-        q_par = self.emu.H_fid / self.emu.cosmo.Hz(np.array([self.z]))
-        q_perp = self.emu.cosmo.comoving_transverse_distance(np.array([self.z])) / self.emu.Dm_fid
+    def get_AP_parameters(self, basis='par_perp', iz=0):
+        q_par = self.emu.H_fid[iz] / self.emu.cosmo.Hz(np.array([self.z_array[iz]]))
+        q_perp = self.emu.cosmo.comoving_transverse_distance(np.array([self.z_array[iz]])) / self.emu.Dm_fid[iz]
         q_par = float(q_par) # Need to change this for multiz
         q_perp = float(q_perp)
         if basis == 'par_perp':
@@ -333,52 +368,63 @@ class Params:
             q_ap = q_par / q_perp
             return q_iso, q_ap
 
-    def get_qiso3(self, p):
-        q_iso = (self.get_AP_parameters(basis='iso_ap')[0])**3
+    def get_qiso3(self, p, iz=0):
+        q_iso = (self.get_AP_parameters(basis='iso_ap', iz=iz)[0])**3
         return q_iso
     
-    def _reparam_bias_factor(self, p, name):
+    def get_sigma_12(self, p, iz=0):
+        s12_out = self.emu.params['s12']
+        return s12_out[iz] if isinstance(s12_out, (list, np.ndarray)) else s12_out
+
+    @staticmethod
+    def get_base_names(param_dict):
+            return list(set("_".join(k.split("_")[:-1]) for k in param_dict.keys())) 
+
+    def _reparam_bias_factor(self, p, name, iz=0):
         factor_ap = 1.0
         factor_sigmaR = 1.0
         if 'ap' in self.reparam_bias_mode:
-            factor_ap = np.sqrt(p['q_iso3'])
+            factor_ap = np.sqrt(p[f'q_iso3_{iz}'])
         if 'sigma_12' in self.reparam_bias_mode:
-            factor_sigmaR = self.sigmaR_ref / p['sigma_12']
+            factor_sigmaR = self.sigmaR_ref / p[f'sigma_12_{iz}']
 
-        if name == 'b1_r':
+        if name == f'b1_r_{iz}':
             return factor_sigmaR * factor_ap
-        if name in ['b2_r', 'b2t_r', 'g2_r', 'bK2_r', 'bG2_r']:
+        if name in [f'b2_r_{iz}', f'b2t_r_{iz}', f'g2_r_{iz}', f'bK2_r_{iz}', f'bG2_r_{iz}']:
             return factor_sigmaR**2 * factor_ap
-        if name in ['g21_r', 'bGam3_r', 'btd_r']:
+        if name in [f'g21_r_{iz}', f'bGam3_r_{iz}', f'btd_r_{iz}']:
             if self.reparam_3ordbias_power == 3.0:
                 return factor_sigmaR**3 * factor_ap
             elif self.reparam_3ordbias_power == 4.0:
                 return factor_sigmaR**4 * factor_ap**2
 
-    def _reparam_counterterm_factor(self, p):
+    def _reparam_counterterm_factor(self, p, iz=0):
         factor = 1.0
         if 'ap' in self.reparam_counterterms_mode:
-            factor *= p['q_iso3']
+            factor *= p[f'q_iso3_{iz}']
         if 'sigma_12' in self.reparam_counterterms_mode:
-            factor *= self.sigmaR_ref**2 / p['sigma_12']**2
+            factor *= self.sigmaR_ref**2 / p[f'sigma_12_{iz}']**2
         return factor
 
-    def _reparam_stochastic_factor(self, p):
+    def _reparam_stochastic_factor(self, p, iz=0):
         factor = 1.0
         if 'ap' in self.reparam_stochastic_mode:
-            factor *= p['q_iso3']
+            factor *= p[f'q_iso3_{iz}']
         return factor
         
     def get_reparam_factor(self, p, name):
-        base_name = name.replace('_r', '')
-        if base_name in self.bias_params:
-            return self._reparam_bias_factor(p, name)
-        elif base_name in self.counterterm_params:
-            return self._reparam_counterterm_factor(p)
-        elif base_name in self.stochastic_params:
-            return self._reparam_stochastic_factor(p)
+        #remove '_r' from the name to get the base parameter name and the redshift index
+        base_name = name.rsplit('_', 2)[0]
+        iz = int(name.split('_')[-1])
+        base_name_iz = f"{base_name}_{iz}"
+        if base_name_iz in self.bias_params:
+            return self._reparam_bias_factor(p, name, iz=iz)
+        elif base_name_iz in self.counterterm_params:
+            return self._reparam_counterterm_factor(p, iz=iz)
+        elif base_name_iz in self.stochastic_params:
+            return self._reparam_stochastic_factor(p, iz=iz)
         else:
-            return 1.0
+            return None
     
     def _compute_reparam(self, p, name):
         return p[name] * self.get_reparam_factor(p, name)
@@ -412,38 +458,46 @@ class Params:
         reparam_stochastic = stochastic_mode in ['ap'] # no sigma_12 required for shot noise
 
         if require_ap:
-            self.set_derived_param('q_iso3', self.get_qiso3, requires_emu_eval=True, latex=r"q_{\rm iso}^3", exported=True)
-        
+            for iz in range(self.nz):
+                self.set_derived_param(f'q_iso3_{iz}', partial(self.get_qiso3, iz=iz), requires_emu_eval=True, latex=r"q_{\rm iso}^3", exported=True)
+
         if require_sigma_12:
-            self.set_derived_param('sigma_12', 's12', requires_emu_eval=True, latex=r"\sigma_{12}", exported=True)
+            for iz in range(self.nz):
+                self.set_derived_param(f'sigma_12_{iz}', partial(self.get_sigma_12, iz=iz), requires_emu_eval=True, latex=r"\sigma_{12}", exported=True)
 
         if reparam_counterterms: 
-            for name in self.counterterm_params.keys():
-                name_reparam = name + '_r'
-                latex_reparam = add_tilde_to_latex(self.parameters[name].latex)
-                self.add_sampled_param(name_reparam, value=0.0, prior=(0, 500), prior_type="gaussian", latex=latex_reparam)
-                self.set_derived_param(name, self._derived_from_name(name_reparam), latex=self.parameters[name].latex, exported=True)
+            for base in self.get_base_names(self.counterterm_params):
+                for iz in range(self.nz):
+                    name_reparam = f"{base}_r_{iz}"
+                    target_name = f"{base}_{iz}"
+                    latex_reparam = add_tilde_to_latex(self.parameters[target_name].latex)
+                    self.add_sampled_param(name_reparam, value=0.0, prior=(0, 500), prior_type="gaussian", latex=latex_reparam)
+                    self.set_derived_param(target_name, self._derived_from_name(name_reparam), latex=self.parameters[target_name].latex, exported=True)
 
         if reparam_bias:
-            for name in self.bias_params.keys():
-                name_reparam = name + '_r'
-                latex_reparam = add_tilde_to_latex(self.parameters[name].latex)
-                if name == 'b1':
-                    prior_type = 'uniform'
-                    prior = (0.5, 4.0)
-                else:
-                    prior_type = 'gaussian'
-                    prior = (0, 20)
+            for base in self.get_base_names(self.bias_params):
+                for iz in range(self.nz):
+                    name_reparam = f"{base}_r_{iz}"
+                    target_name = f"{base}_{iz}"
+                    latex_reparam = add_tilde_to_latex(self.parameters[target_name].latex)
+                    if base == 'b1':
+                        prior_type = 'uniform'
+                        prior = (0.5, 4.0)
+                    else:
+                        prior_type = 'gaussian'
+                        prior = (0, 20)
 
-                self.add_sampled_param(name_reparam, value=0.0, prior=prior, prior_type=prior_type, latex=latex_reparam)
-                self.set_derived_param(name, self._derived_from_name(name_reparam), latex=self.parameters[name].latex, exported=True)
+                    self.add_sampled_param(name_reparam, value=0.0, prior=prior, prior_type=prior_type, latex=latex_reparam)
+                    self.set_derived_param(target_name, self._derived_from_name(name_reparam), latex=self.parameters[target_name].latex, exported=True)
             
         if reparam_stochastic:
-            for name in self.stochastic_params.keys():
-                name_reparam = name + '_r'
-                latex_reparam = add_tilde_to_latex(self.parameters[name].latex)
-                self.add_sampled_param(name_reparam, value=0.0, prior=(-1, 1), prior_type="uniform", latex=latex_reparam)
-                self.set_derived_param(name, self._derived_from_name(name_reparam), latex=self.parameters[name].latex, exported=True)
+            for base in self.get_base_names(self.stochastic_params):
+                for iz in range(self.nz):
+                    name_reparam = f"{base}_r_{iz}"
+                    target_name = f"{base}_{iz}"
+                    latex_reparam = add_tilde_to_latex(self.parameters[target_name].latex)
+                    self.add_sampled_param(name_reparam, value=0.0, prior=(-1, 1), prior_type="uniform", latex=latex_reparam)
+                    self.set_derived_param(target_name, self._derived_from_name(name_reparam), latex=self.parameters[target_name].latex, exported=True)
 
 def add_tilde_to_latex(latex_str):
     # separate base from the rest of the string

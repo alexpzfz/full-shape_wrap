@@ -9,19 +9,21 @@ class BaseModel:
     def __init__(self, **kwargs):
         pass
     
-    def predict(self, observable, params, **kwargs):
+    def predict(self, observables, params, **kwargs):
         """Predict the observable given the parameters
            This method should return a 1D array of the same length as the data vector of the observable
         """
-        if isinstance(observable, PowerSpectrumMultipoles):
-            return self.predict_power_spectrum_multipoles(observable, params, **kwargs)
-        elif isinstance(observable, BispectrumScoccimarroMultipoles):
-            return self.predict_bispectrum_scoccimarro_multipoles(observable, params, **kwargs)
-        elif isinstance(observable, BispectrumSugiyamaMultipoles):
-            return self.predict_bispectrum_sugiyama_multipoles(observable, params, **kwargs)
-        elif isinstance(observable, JointObservable):
+        if not isinstance(observables, list):
+            observables = [observables]
+        if isinstance(observables[0], PowerSpectrumMultipoles):
+            return self.predict_power_spectrum_multipoles(observables, params, **kwargs)
+        elif isinstance(observables[0], BispectrumScoccimarroMultipoles):
+            return self.predict_bispectrum_scoccimarro_multipoles(observables, params, **kwargs)
+        elif isinstance(observables[0], BispectrumSugiyamaMultipoles):
+            return self.predict_bispectrum_sugiyama_multipoles(observables, params, **kwargs)
+        elif isinstance(observables[0], JointObservable):
             pred_list = []
-            for obs in observable.observables:
+            for obs in observables[0].observables:
                 pred_list.append(self.predict(obs, params, **kwargs))
             return np.concatenate(pred_list)
         
@@ -34,14 +36,27 @@ class COMET(comet, BaseModel):
         self._extra_diagrams = ['Pctr_a0', 'Pctr_a2', 'Pctr_a4']
         self._extra_diagrams_to_marg = {'a0': 'Pctr_a0', 'a2': 'Pctr_a2', 'a4': 'Pctr_a4'}
 
-    def predict_power_spectrum_multipoles(self, observable, params, de_model):
-        k = observable.k if observable.kwin is None else observable.kwin
-        ell = observable.ell if observable.ellwin is None else observable.ellwin
-        pell = self.Pell(k, params, ell, de_model=de_model)
-        pell = np.concatenate([pell[f'ell{ll}'] for ll in ell])
-        if observable.xwin is not None:
-            pell = observable.wmat @ pell
-        return pell
+    def predict_power_spectrum_multipoles(self, observables, params, de_model):
+        ell_all = list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)]))
+        k_arrays = [np.concatenate(obs.k) if obs.kwin is None else np.concatenate(obs.kwin) for obs in observables]
+        k_all = np.unique(np.concatenate(k_arrays))
+        pell_batched = self.Pell(k_all, params, ell_all, de_model=de_model)
+        preds = [] 
+        is_batched = isinstance(params.get('z'), (list, np.ndarray)) and len(params['z']) > 1
+        for iz, obs in enumerate(observables):
+            k = obs.k if obs.kwin is None else obs.kwin
+            ell = obs.ell if obs.ellwin is None else obs.ellwin
+            pell_z = []
+            for i, ell in enumerate(ell):
+                idx = np.searchsorted(k_all, k[i])
+                p = pell_batched[f'ell{ell}'][iz, idx] if is_batched else pell_batched[f'ell{ell}'][idx]
+                pell_z.append(p)
+            pell_z = np.concatenate(pell_z)
+            if obs.xwin is not None:
+                pell_z = obs.wmat @ pell_z
+            preds.append(pell_z)
+
+        return preds
     
     def predict_bispectrum_scoccimarro_multipoles(self, observable, params, de_model):
         bk = self.Bell_scoccimarro(observable.tri, params, observable.ell, de_model=de_model)

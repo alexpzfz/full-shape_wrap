@@ -4,32 +4,37 @@ import params
 
 class Likelihood:
     """Base class for likelihoods"""
-    def __init__(self, observable, emu, params, am_params=None,
+    def __init__(self, observables, emu, params, am_params=None,
                  am_sample = True, am_from_comet=False, conditional_prior=None):
-        self.observable = observable
-        if self.observable.__class__.__name__ == 'JointObservable':
-            self.observables = observable.observables
-        else:
-            self.observables = [observable]
+        self.observables = observables if isinstance(observables, list) else [observables]
+        # sort observables by redshift
+        print("Sorting observables by redshift...")
+        self.observables.sort(key=lambda obs: obs.cosmo_fid['z'])
+
+        # if self.observable.__class__.__name__ == 'JointObservable':
+        #     self.observables = observable.observables
+        # else:
+        #     self.observables = [observable]
         self.nobservables = len(self.observables)
     
-        self.cov = self.observable.cov
-        self.nmocks_cov = observable.nmocks_cov
-        if self.nmocks_cov is not None:
-            self._rescale_covariance(mode='Hartlap')
-        self.icov = np.linalg.inv(self.cov)
-        self.lcov = np.linalg.cholesky(self.cov)
+        self.covs = [obs.cov for obs in self.observables]
+        self.nmocks_covs = [obs.nmocks_cov for obs in self.observables]
+        self._rescale_covariance(mode='Hartlap')
+        # self.icov = np.linalg.inv(self.cov)
+        self.lcovs = [np.linalg.cholesky(obs.cov) for obs in self.observables]
         self.emu = emu
         self.params = params
-        self.params.z = observable.cosmo_fid['z']  # Set redshift in params for use in derived parameters if needed
         self.de_model = self.params.de_model
         # self.x = observable.x
         # self.xwin = observable.xwin
-        self.y = observable.get_flatten()
-        self.emu.define_fiducial_cosmology(observable.cosmo_fid)
-        if getattr(self.observable, 'nbar', None) is not None:
-            self.nbar = observable.nbar
-            self.emu.define_nbar(self.nbar)
+        self.ys = [obs.get_flatten() for obs in self.observables]
+        self.z_list = [obs.cosmo_fid['z'] for obs in self.observables]
+        cosmo_fid = self.observables[0].cosmo_fid
+        cosmo_fid['z'] = self.z_list
+        self.emu.define_fiducial_cosmology(cosmo_fid)
+        self.nbar_list = [getattr(obs, 'nbar', None) for obs in self.observables]
+        if any(nbar is not None for nbar in self.nbar_list):
+            self.emu.define_nbar(self.nbar_list)
         
         
         self.conditional_prior = None
@@ -37,32 +42,59 @@ class Likelihood:
             self.add_conditional_prior(conditional_prior)
 
         self.do_am = False
-        self.am_params = am_params
+        #self.am_params = am_params
         self.am_sample = am_sample
         self.am_sample_mode = None if not self.am_sample else 'sample' # 'sample' or 'map'
-        if self.am_params is not None:
-            if not isinstance(self.am_params, list):
-                self.am_params = [self.am_params]
-             # check that all am_params are in bias, counterterms or stochastic
-            for am_param in self.am_params:
-                am_param_base = am_param.replace('_r', '') if am_param.endswith('_r') else am_param
-                if am_param_base not in self.params.bias_params and am_param_base not in self.params.counterterm_params and am_param_base not in self.params.stochastic_params:
-                    raise ValueError(f"AM parameter '{am_param}' not found in bias, counterterm or stochastic parameters.")
-                # check that gaussian priors are set for all am_params
-                if self.params.parameters[am_param].prior is None or self.params.parameters[am_param].prior_type != 'gaussian':
-                    raise ValueError(f"AM parameter '{am_param}' must have a Gaussian prior defined.")
-                
-                # make sure these params are initialized to zero and now keep them fixed to zero in the sampler
-                self.params.parameters[am_param].value = 0.0
-                self.params.parameters[am_param].fixed = True
-                if self.am_sample:
-                    self.params.parameters[am_param].derived_am = True
-                    self.params.parameters[am_param].exported = True
+        if am_params is not None:
+            self.do_am = True
+            self.am_params = []
+            self.am_params_0 = []
+            self.am_inv_cov = []
+            self.am_det_cov = []
 
-                if am_param.endswith('_r'):
-                    self.params.parameters[am_param_base].fixed = True
-                    self.params.parameters[am_param_base].value = 0.0
-                    self.params.parameters[am_param_base].derived = False
+            base_am_params = am_params if isinstance(am_params, list) else [am_params]
+            for iz in range(self.nobservables):
+                am_iz = [f"{param}_{iz}" for param in base_am_params]
+                self.am_params.append(am_iz)
+                for param in am_iz:
+                    self.params.parameters[param].value = 0.0
+                    self.params.parameters[param].fixed = True
+                    self.params.parameters[param].derived_am = True
+                    self.params.parameters[param].exported = True
+                    if '_r_' in param:
+                        base_param = param.replace('_r_', '_')
+                        self.params.parameters[base_param].value = 0.0
+                        self.params.parameters[base_param].fixed = True
+                        self.params.parameters[base_param].derived = False
+                
+                p0 = np.array([self.params.parameters[param].prior[0] for param in am_iz])
+                inv_cov = np.diag([1/self.params.parameters[param].prior[1]**2 for param in am_iz])
+                det_cov = np.prod([self.params.parameters[param].prior[1]**2 for param in am_iz])
+                self.am_params_0.append(p0)
+                self.am_inv_cov.append(inv_cov)
+                self.am_det_cov.append(det_cov)
+
+
+            #  # check that all am_params are in bias, counterterms or stochastic
+            # for am_param in self.am_params:
+            #     am_param_base = am_param.replace('_r', '') if am_param.endswith('_r') else am_param
+            #     if am_param_base not in self.params.bias_params and am_param_base not in self.params.counterterm_params and am_param_base not in self.params.stochastic_params:
+            #         raise ValueError(f"AM parameter '{am_param}' not found in bias, counterterm or stochastic parameters.")
+            #     # check that gaussian priors are set for all am_params
+            #     if self.params.parameters[am_param].prior is None or self.params.parameters[am_param].prior_type != 'gaussian':
+            #         raise ValueError(f"AM parameter '{am_param}' must have a Gaussian prior defined.")
+                
+            #     # make sure these params are initialized to zero and now keep them fixed to zero in the sampler
+            #     self.params.parameters[am_param].value = 0.0
+            #     self.params.parameters[am_param].fixed = True
+            #     if self.am_sample:
+            #         self.params.parameters[am_param].derived_am = True
+            #         self.params.parameters[am_param].exported = True
+
+            #     if am_param.endswith('_r'):
+            #         self.params.parameters[am_param_base].fixed = True
+            #         self.params.parameters[am_param_base].value = 0.0
+            #         self.params.parameters[am_param_base].derived = False
                     
         
             # # for the moment we use comet's chi2 function for AM
@@ -75,10 +107,10 @@ class Likelihood:
             #     self.am_priors = {am_param: self.params.parameters[am_param].prior for am_param in self.am_params}
 
             # self.do_am = True
-            self.do_am = True
-            self.am_params_0 = np.array([self.params.parameters[am_param].prior[0] for am_param in self.am_params])
-            self.am_inv_cov = np.diag([1/self.params.parameters[am_param].prior[1]**2 for am_param in self.am_params])
-            self.am_det_cov = np.prod([self.params.parameters[am_param].prior[1]**2 for am_param in self.am_params])
+            # self.do_am = True
+            # self.am_params_0 = np.array([self.params.parameters[am_param].prior[0] for am_param in self.am_params])
+            # self.am_inv_cov = np.diag([1/self.params.parameters[am_param].prior[1]**2 for am_param in self.am_params])
+            # self.am_det_cov = np.prod([self.params.parameters[am_param].prior[1]**2 for am_param in self.am_params])
             
         # if observable.__class__ == PowerSpectrumMultipoles:
         #     self.get_chi2 = self._get_chi2_powerspectrum
@@ -104,15 +136,16 @@ class Likelihood:
         #     self.pell_func = emu.Pell
 
     def _rescale_covariance(self, mode='Hartlap'):
-        n_data = self.observable.n_data
-        n_mocks = self.nmocks_cov
-        if mode == 'Hartlap':
-            factor = (n_mocks - n_data - 2) / (n_mocks - 1)
-        else:
-            raise NotImplementedError(f"Covariance rescaling mode '{mode}' not implemented")
-        print(f"Rescaling covariance by factor {1/factor:.3f} using {mode} correction: n_mocks={n_mocks}, n_data={n_data}")
+        for i, obs in enumerate(self.observables):
+            n_data = obs.n_data
+            n_mocks = self.nmocks_covs[i]
+            if mode == 'Hartlap':
+                factor = (n_mocks - n_data - 2) / (n_mocks - 1)
+            else:
+                raise NotImplementedError(f"Covariance rescaling mode '{mode}' not implemented")
+            print(f"Rescaling covariance by factor {1/factor:.3f} using {mode} correction: n_mocks={n_mocks}, n_data={n_data}")
+            self.covs[i] *= 1/factor
         #self.icov *= factor
-        self.cov /= factor
 
     # def _get_chi2_powerspectrum(self, params):
     #     comet_params = self.params.get_comet_dict(params)
@@ -145,20 +178,23 @@ class Likelihood:
     
     def get_chi2(self, params):
         comet_params = self.params.get_comet_dict(params)
-        pred = self.emu.predict(self.observable, comet_params, de_model=self.de_model)
-        delta = self.y - pred
-        if not self.do_am:
-            # chi2 = delta.T @ self.icov @ delta
-            chi2 = get_bCib(self.lcov, delta)
-        else:
-            dm = self.get_design_matrix(params)
-            if not self.am_sample:
-                chi2 = self.marg_chi2(delta, self.lcov, self.am_params_0, self.am_inv_cov, self.am_det_cov, dm)
+        preds = self.emu.predict(self.observables, comet_params, de_model=self.de_model)
+
+        total_chi2 = 0.0
+        for i, obs in enumerate(self.observables):
+            delta = self.ys[i] - preds[i]
+            if not self.do_am:
+                chi2 = get_bCib(self.lcovs[i], delta)
             else:
-                chi2, cond_mean, cond_cov = self.marg_chi2(delta, self.lcov, self.am_params_0, self.am_inv_cov,
-                                                            self.am_det_cov, dm, return_cond_mean_cov=True)
-                self.sample_cond_am(params, cond_mean, cond_cov, mode=self.am_sample_mode)
-        return chi2
+                dm_iz = self.get_design_matrix(params, i)  # This should be modified to get the correct design matrix for each observable if needed
+                if not self.am_sample:
+                    chi2 = self.marg_chi2(delta, self.lcovs[i], self.am_params_0[i], self.am_inv_cov[i], self.am_det_cov[i], dm_iz)
+                else:
+                    chi2, cond_mean, cond_cov = self.marg_chi2(delta, self.lcovs[i], self.am_params_0[i], self.am_inv_cov[i],
+                                                                self.am_det_cov[i], dm_iz, return_cond_mean_cov=True)
+                    self.sample_cond_am(params, cond_mean, cond_cov, iz=i, mode=self.am_sample_mode)
+            total_chi2 += chi2
+        return total_chi2 
 
     def get_loglike(self, params):
         chi2 = self.get_chi2(params)
@@ -192,42 +228,49 @@ class Likelihood:
         return chi2
     
 
-    def get_design_matrix(self, params):
-        if self.observable.__class__.__name__ == 'PowerSpectrumMultipoles':
-            return self.get_design_matrix_pk(params, self.observable)
-        elif 'Bispectrum' in self.observable.__class__.__name__:
-            return self.get_design_matrix_bk(params, self.observable)
-        elif self.observable.__class__.__name__ == 'JointObservable':
+    def get_design_matrix(self, params, iz):
+        observable = self.observables[iz]
+        if observable.__class__.__name__ == 'PowerSpectrumMultipoles':
+            return self.get_design_matrix_pk(params, iz)
+        elif 'Bispectrum' in observable.__class__.__name__:
+            return self.get_design_matrix_bk(params, observable)
+        elif observable.__class__.__name__ == 'JointObservable':
             dm_pk = self.get_design_matrix_pk(params, self.observables[0])
             dm_bk = self.get_design_matrix_bk(params, self.observables[1])
             return self.join_design_matrices(dm_pk, dm_bk)
     
-    def get_design_matrix_pk(self, params, observable):
+
+    def get_design_matrix_pk(self, params, iz):
         _bispec_only_params = ['NB0', 'MB0']
-        am_params = [param for param in self.am_params if param not in _bispec_only_params and param.replace('_r', '') not in _bispec_only_params]
-        comet_params = self.params.get_comet_dict(params)
-        design_mat = np.zeros((observable.n_data, len(am_params)))
+        am_params_iz = [p for p in self.am_params[iz] if p not in _bispec_only_params and p.replace('_r', '') not in _bispec_only_params]
+        observable = self.observables[iz]
+        comet_params_batched = self.params.get_comet_dict(params)
+        is_batched = isinstance(comet_params_batched.get('z'), (list, np.ndarray))
+        if is_batched:
+            comet_params_iz = {k: v[iz] if isinstance(v, (list, np.ndarray)) else v for k, v in comet_params_batched.items()}
+        else:
+            comet_params_iz = comet_params_batched
+        design_mat = np.zeros((observable.n_data, len(am_params_iz)))
         xeval = observable.xwin if observable.xwin is not None else observable.x
         elleval = observable.ell if observable.xwin is None else observable.ellwin
         convol = observable.xwin is not None
-        for i, param in enumerate(am_params):
-            if param.endswith('_r'):
-                param_base = param.replace('_r', '')
+        for i, param in enumerate(am_params_iz):
+            base_name = param.split('_')[0]
+            if '_r_' in param:
                 factor = self.params.get_reparam_factor(params, param)
             else:
-                param_base = param
                 factor = 1.0
 
-            if param_base not in ['a0', 'a2', 'a4']: 
-                diag_to_marg = self.emu.diagrams_to_marg[param_base]
+            if base_name not in ['a0', 'a2', 'a4']: 
+                diag_to_marg = self.emu.diagrams_to_marg[base_name]
                 bx = self.emu._get_bias_coeff_for_AM(diag_to_marg)
                 
                 bx = bx * factor# Apply reparametrization factor if needed
-                px_ell = self.emu.PX_ell(xeval, comet_params, elleval, diag_to_marg, de_model=self.de_model)
+                px_ell = self.emu.PX_ell(xeval, comet_params_iz, elleval, diag_to_marg, de_model=self.de_model)
             else:
-                diag_to_marg = self.emu._extra_diagrams_to_marg[param_base]
+                diag_to_marg = self.emu._extra_diagrams_to_marg[base_name]
                 bx = factor # Apply reparametrization factor if needed
-                px_ell = self.emu.PX_ell_extra(xeval, comet_params, elleval, diag_to_marg, de_model=self.de_model)
+                px_ell = self.emu.PX_ell_extra(xeval, comet_params_iz, elleval, diag_to_marg, de_model=self.de_model)
             nx = px_ell[f'ell0'].ndim
             if nx == 1:
                 m_list = [bx * px_ell[f'ell{l}'] for l in elleval]
@@ -318,9 +361,9 @@ class Likelihood:
                 return old_prior(params) and conditional_prior(params)
             self.conditional_prior = combined_prior
 
-    def sample_cond_am(self, params, mean, cov, mode='sample'):
-        if len(self.am_params) == 1:
-            am_param = self.am_params[0]
+    def sample_cond_am(self, params, mean, cov, iz=0, mode='sample'):
+        if len(self.am_params[iz]) == 1:
+            am_param = self.am_params[iz][0]
             if mode == 'sample':
                 value = np.random.normal(mean, np.sqrt(cov))  # Sample from the conditional distribution
             else:
@@ -329,13 +372,13 @@ class Likelihood:
         else:
             if mode == 'sample':
                 # Sample from a normal distribution with mean 0 and cov 1.
-                z = np.random.normal(size=len(self.am_params))
+                z = np.random.normal(size=len(self.am_params[iz]))
                 # Transform to the desired mean and covariance using the Cholesky decomposition.
                 cov_chol = np.linalg.cholesky(cov)
                 value = mean + cov_chol @ z    
             else:
                 value = mean  # MAP estimate
-            for i, am_param in enumerate(self.am_params):
+            for i, am_param in enumerate(self.am_params[iz]):
                 params[am_param] = value[i]
 
 
