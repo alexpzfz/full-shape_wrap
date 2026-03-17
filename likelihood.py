@@ -29,8 +29,8 @@ class Likelihood:
         # self.xwin = observable.xwin
         self.ys = [obs.get_flatten() for obs in self.observables]
         self.z_list = [obs.cosmo_fid['z'] for obs in self.observables]
-        cosmo_fid = self.observables[0].cosmo_fid
-        cosmo_fid['z'] = self.z_list
+        cosmo_fid = {p: np.array([v]*self.nobservables) for p, v in self.observables[0].cosmo_fid.items()}
+        cosmo_fid['z'] = np.array(self.z_list)
         self.emu.define_fiducial_cosmology(cosmo_fid)
         self.nbar_list = [getattr(obs, 'nbar', None) for obs in self.observables]
         if any(nbar is not None for nbar in self.nbar_list):
@@ -139,12 +139,13 @@ class Likelihood:
         for i, obs in enumerate(self.observables):
             n_data = obs.n_data
             n_mocks = self.nmocks_covs[i]
-            if mode == 'Hartlap':
-                factor = (n_mocks - n_data - 2) / (n_mocks - 1)
-            else:
-                raise NotImplementedError(f"Covariance rescaling mode '{mode}' not implemented")
-            print(f"Rescaling covariance by factor {1/factor:.3f} using {mode} correction: n_mocks={n_mocks}, n_data={n_data}")
-            self.covs[i] *= 1/factor
+            if n_mocks is not None:
+                if mode == 'Hartlap':
+                    factor = (n_mocks - n_data - 2) / (n_mocks - 1)
+                else:
+                    raise NotImplementedError(f"Covariance rescaling mode '{mode}' not implemented")
+                print(f"Rescaling covariance by factor {1/factor:.3f} using {mode} correction: n_mocks={n_mocks}, n_data={n_data}")
+                self.covs[i] *= 1/factor
         #self.icov *= factor
 
     # def _get_chi2_powerspectrum(self, params):
