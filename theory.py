@@ -49,9 +49,10 @@ class COMET(comet, BaseModel):
             pell_z = []
             for i, ell in enumerate(ell):
                 idx = np.searchsorted(k_all, k[i])
-                p = pell_batched[f'ell{ell}'][iz, idx] if is_batched else pell_batched[f'ell{ell}'][idx]
+                p = pell_batched[f'ell{ell}'][idx, iz] if is_batched else pell_batched[f'ell{ell}'][idx]
                 pell_z.append(p)
             pell_z = np.concatenate(pell_z)
+        
             if obs.xwin is not None:
                 pell_z = obs.wmat @ pell_z
             preds.append(pell_z)
