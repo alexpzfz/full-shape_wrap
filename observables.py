@@ -85,12 +85,12 @@ class Observable:
 
 class PowerSpectrumMultipoles(Observable):
     """Power spectrum multipoles"""
-    def __init__(self, k, Pell, ell=None, cov=None, nbar=None, cosmo_fid=None, Mpc_units=False, kmin=None, kmax=None,
+    def __init__(self, k, Pell, ell=None, cov=None, nbar=None, cosmo_fid=None, input_Mpc_units=False, save_Mpc_units=True, kmin=None, kmax=None,
                  wmat=None, kwin=None, ellwin=None, kwinmin=None, kwinmax=None, nmocks_cov=None):
         super().__init__(k, Pell, cov, nbar, cosmo_fid, xmin=kmin, xmax=kmax, nmocks_cov=nmocks_cov,
                          wmat=wmat, xwin=kwin, xwinmin=kwinmin, xwinmax=kwinmax)
-        # Internatlly, everything is done in Mpc units
-        if not Mpc_units:
+
+        if not input_Mpc_units and save_Mpc_units:
             assert getattr(self, 'h_fid') is not None, "h value is required to convert to Mpc units"
             self.x = [xi * self.h_fid for xi in self.x]
             self.y = [yi / self.h_fid**3 for yi in self.y]
@@ -99,6 +99,8 @@ class PowerSpectrumMultipoles(Observable):
                 self.cov = self.cov / self.h_fid**6
             if self.xwin is not None:
                 self.xwin = [xwini * self.h_fid for xwini in self.xwin]
+
+        self.Mpc_units = save_Mpc_units
         self.k = self.x
         self.Pell = self.y
         self.kwin = self.xwin
