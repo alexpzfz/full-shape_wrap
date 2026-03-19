@@ -90,13 +90,18 @@ class Params:
             for iz in range(self.nz):
                 for p in param_list:
                     new_name = f"{p.name}_{iz}"
-                    new_latex = p.latex + f"_{{{iz}}}" if p.latex else ""
+                    new_latex = add_iz_to_latex(p.latex, iz) if p.latex else ""
                     res[new_name] = dataclasses.replace(p, name=new_name, base_name=p.name, latex=new_latex)
             return res
         
         self.bias_params = duplicate(_bias_params[emu.bias_basis])
-        self.extra_params = duplicate(_extra_params[emu.model])
         self.counterterm_params = duplicate(_counterterm_params[emu.counterterm_basis])
+        self.extra_params = {}
+        if 'VDG' in emu.model:
+            self.extra_params.update(duplicate(_extra_params['VDG_infty']))
+        elif 'EFT' in emu.model:
+            self.counterterm_params.update(duplicate(_extra_params['EFT']))
+
         self.stochastic_params = duplicate(_stochastic_params)
 
         self.parameters = {**self.cosmo_params, **self.bias_params, **self.counterterm_params, **self.stochastic_params, **self.extra_params}
@@ -308,8 +313,8 @@ class Params:
             return comet_dict
     
     def cosmo_dict(self, full_dict):
-        cosmo_dict = {key: full_dict[key] for key in self.cosmo_params if key in full_dict}
-        cosmo_dict['z'] = self.z_array
+        cosmo_dict = {key: np.array([full_dict[key]]*self.nz) for key in self.cosmo_params if key in full_dict}
+        cosmo_dict['z'] = np.array(self.z_array)
         return cosmo_dict
 
     def set_param_value(self, name, value):
@@ -359,10 +364,13 @@ class Params:
 
 
     def get_AP_parameters(self, basis='par_perp', iz=0):
-        q_par = self.emu.H_fid[iz] / self.emu.cosmo.Hz(np.array([self.z_array[iz]]))
-        q_perp = self.emu.cosmo.comoving_transverse_distance(np.array([self.z_array[iz]])) / self.emu.Dm_fid[iz]
+        q_par = self.emu.H_fid[iz] / self.emu.cosmo.Hz(np.array(self.z_array))[iz]
+        q_perp = self.emu.cosmo.comoving_transverse_distance(np.array(self.z_array))[iz] / self.emu.Dm_fid[iz]
         q_par = float(q_par) # Need to change this for multiz
         q_perp = float(q_perp)
+        if not self.emu.use_Mpc:
+            q_par *= self.emu.params['h'][0]
+            q_perp *= self.emu.params['h'][0]
         if basis == 'par_perp':
             return q_par, q_perp
         elif basis == 'iso_ap':
@@ -388,7 +396,7 @@ class Params:
         if 'ap' in self.reparam_bias_mode:
             factor_ap = np.sqrt(p[f'q_iso3_{iz}'])
         if 'sigma_12' in self.reparam_bias_mode:
-            factor_sigmaR = self.sigmaR_ref / p[f'sigma_12_{iz}']
+            factor_sigmaR = self.sigmaR_ref[iz] / p[f'sigma_12_{iz}']
 
         if name == f'b1_r_{iz}':
             return factor_sigmaR * factor_ap
@@ -405,7 +413,7 @@ class Params:
         if 'ap' in self.reparam_counterterms_mode:
             factor *= p[f'q_iso3_{iz}']
         if 'sigma_12' in self.reparam_counterterms_mode:
-            factor *= self.sigmaR_ref**2 / p[f'sigma_12_{iz}']**2
+            factor *= self.sigmaR_ref[iz]**2 / p[f'sigma_12_{iz}']**2
         return factor
 
     def _reparam_stochastic_factor(self, p, iz=0):
@@ -436,7 +444,7 @@ class Params:
         
 
     def use_reparametrization(self, bias_mode='ap+sigma_12', counterterms_mode='ap+sigma_12',
-                              stochastic_mode='ap', third_oder_bias_power=3.0, sigmaR_ref=1.0):
+                              stochastic_mode='ap', third_oder_bias_power=4.0, sigmaR_ref=1.0):
 
         # verify that the specified modes are valid
         valid_modes = ['ap', 'sigma_12', 'ap+sigma_12', 'none']
@@ -451,7 +459,7 @@ class Params:
         self.reparam_counterterms_mode = counterterms_mode
         self.reparam_stochastic_mode = stochastic_mode
         self.reparam_3ordbias_power = third_oder_bias_power
-        self.sigmaR_ref = sigmaR_ref
+        self.sigmaR_ref = sigmaR_ref if isinstance(sigmaR_ref, (list, np.ndarray)) else [sigmaR_ref]*self.nz
 
         require_ap = 'ap' in bias_mode or 'ap' in counterterms_mode or 'ap' in stochastic_mode
         require_sigma_12 = 'sigma_12' in bias_mode or 'sigma_12' in counterterms_mode or 'sigma_12' in stochastic_mode
@@ -461,11 +469,15 @@ class Params:
 
         if require_ap:
             for iz in range(self.nz):
-                self.set_derived_param(f'q_iso3_{iz}', partial(self.get_qiso3, iz=iz), requires_emu_eval=True, latex=r"q_{\rm iso}^3", exported=True)
+                name = f'q_iso3_{iz}'
+                latex = add_iz_to_latex(r"q_{\rm iso}^3", iz)
+                self.set_derived_param(name, partial(self.get_qiso3, iz=iz), requires_emu_eval=True, latex=latex, exported=True)
 
         if require_sigma_12:
             for iz in range(self.nz):
-                self.set_derived_param(f'sigma_12_{iz}', partial(self.get_sigma_12, iz=iz), requires_emu_eval=True, latex=r"\sigma_{12}", exported=True)
+                name = f'sigma_12_{iz}'
+                latex = add_iz_to_latex(r"\sigma_{12}", iz)
+                self.set_derived_param(name, partial(self.get_sigma_12, iz=iz), requires_emu_eval=True, latex=latex, exported=True)
 
         if reparam_counterterms: 
             for base in self.get_base_names(self.counterterm_params):
@@ -507,10 +519,15 @@ def add_tilde_to_latex(latex_str):
     rest = ''
     i = 0
     while i < len(latex_str):
-        if latex_str[i] in ['^', '_']:
+        if latex_str[i] in ['^', '_', '{', '(', '[']:
             rest = latex_str[i:]
             break
         else:
             base += latex_str[i]
         i += 1
     return r"\tilde{" + base + "}" + rest
+
+def add_iz_to_latex(latex_str, iz):
+    # separate base from the rest of the string
+    zstring = f"(z_{{{iz}}})"
+    return latex_str + zstring
