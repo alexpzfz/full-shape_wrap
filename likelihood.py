@@ -37,9 +37,9 @@ class Likelihood:
             self.emu.define_nbar(self.nbar_list)
         
         
-        self.conditional_prior = None
-        if conditional_prior is not None:
-            self.add_conditional_prior(conditional_prior)
+        self.conditional_prior = conditional_prior
+        # if conditional_prior is not None:
+        #     self.add_conditional_prior(conditional_prior)
 
         self.do_am = False
         #self.am_params = am_params
@@ -120,13 +120,13 @@ class Likelihood:
         #         if am_from_comet:
         #             self.get_chi2 = self._get_chi2_am_from_comet
 
-        if self.conditional_prior is not None:
-            old_get_chi2 = self.get_chi2
-            def get_chi2_with_prior(params):
-                if not self.conditional_prior(params):
-                    return np.inf  # Return infinite chi2 if prior condition is not satisfied
-                return old_get_chi2(params)
-            self.get_chi2 = get_chi2_with_prior
+        # if self.conditional_prior is not None:
+        #     old_get_chi2 = self.get_chi2
+        #     def get_chi2_with_prior(params):
+        #         if not self.conditional_prior(params):
+        #             return np.inf  # Return infinite chi2 if prior condition is not satisfied
+        #         return old_get_chi2(params)
+        #     self.get_chi2 = get_chi2_with_prior
 
      
         # if self.params.fixed_cosmo:
@@ -178,6 +178,8 @@ class Likelihood:
     #     return chi2
     
     def get_chi2(self, params):
+        if self.conditional_prior is not None and not self.conditional_prior(params):
+            return np.inf  # Return infinite chi2 if prior condition is not satisfied
         comet_params = self.params.get_comet_dict(params)
         preds = self.emu.predict(self.observables, comet_params, de_model=self.de_model)
 
@@ -357,16 +359,16 @@ class Likelihood:
         return dm
 
 
-    def add_conditional_prior(self, conditional_prior):
-        """Add a conditional prior to the likelihood. The conditional_prior should be a function that takes the full parameter vector
-          and returns a boolean indicating whether the parameters satisfy the prior condition or not."""
-        if self.add_conditional_prior is None:
-            self.conditional_prior = conditional_prior
-        else:
-            old_prior = self.conditional_prior
-            def combined_prior(params):
-                return old_prior(params) and conditional_prior(params)
-            self.conditional_prior = combined_prior
+    # def add_conditional_prior(self, conditional_prior):
+    #     """Add a conditional prior to the likelihood. The conditional_prior should be a function that takes the full parameter vector
+    #       and returns a boolean indicating whether the parameters satisfy the prior condition or not."""
+    #     if self.add_conditional_prior is None:
+    #         self.conditional_prior = conditional_prior
+    #     else:
+    #         old_prior = self.conditional_prior
+    #         def combined_prior(params):
+    #             return old_prior(params) and conditional_prior(params)
+    #         self.conditional_prior = combined_prior
 
     def sample_cond_am(self, params, mean, cov, iz=0, mode='sample'):
         if len(self.am_params[iz]) == 1:
