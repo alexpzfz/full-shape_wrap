@@ -50,8 +50,9 @@ class COMET(comet, BaseModel):
 
     def predict_bispectrum_sugiyama_multipoles(self, observable, params, de_model):
         ell = observable.ell if observable.ellwin is None else observable.ellwin
-        bsugi = self.Bell_sugiyama(observable.pair, params, ell, de_model=de_model) #shape (npair, n_ell)
-        bsugi = np.concatenate([bsugi[f'{ell}'] for ell in observable.ell])
+        pair = observable.pair if observable.pairwin is None else observable.pairwin
+        bsugi = self.Bell_sugiyama(pair, params, ell, de_model=de_model) #shape (npair, n_ell)
+        bsugi = np.concatenate([bsugi[f'{ll}'] for ll in ell])
         if observable.xwin is not None:
             bsugi = observable.wmat @ bsugi 
         return bsugi

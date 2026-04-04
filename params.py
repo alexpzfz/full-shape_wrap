@@ -248,7 +248,7 @@ class Params:
                         self.emu.PL(0.1, cosmo_dict, de_model=self.de_model)  # Ensure PLin is evaluated for current cosmology
                         plin_evaluated = True
                     if isinstance(param.derived_func, str):
-                        full_dict[name] = float(self.emu.params[param.derived_func]) # This will only work when 1 dataset is used, need to fix this in the future
+                        full_dict[name] = self.emu.params[param.derived_func].item() # This will only work when 1 dataset is used, need to fix this in the future
                     elif callable(param.derived_func):
                         full_dict[name] = param.derived_func(full_dict)
 
@@ -324,8 +324,8 @@ class Params:
     def get_AP_parameters(self, basis='par_perp'):
         q_par = self.emu.H_fid / self.emu.cosmo.Hz(np.array([self.z]))
         q_perp = self.emu.cosmo.comoving_transverse_distance(np.array([self.z])) / self.emu.Dm_fid
-        q_par = float(q_par) # Need to change this for multiz
-        q_perp = float(q_perp)
+        q_par = q_par.item() # Need to change this for multiz
+        q_perp = q_perp.item()
         if basis == 'par_perp':
             return q_par, q_perp
         elif basis == 'iso_ap':

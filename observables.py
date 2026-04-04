@@ -174,8 +174,8 @@ class BispectrumScoccimarroMultipoles(Observable):
     
 class BispectrumSugiyamaMultipoles(Observable):
     def __init__(self, pair, Bell, ell=None, cov=None, nbar=None, cosmo_fid=None, Mpc_units=False, kmin=None, kmax=None,
-                 wmat=None, kwin=None, ellwin=None, kwinmin=None, kwinmax=None, nmocks_cov=None):
-        super().__init__(pair, Bell, cov, nbar, cosmo_fid, xmin=kmin, xmax=kmax, wmat=wmat, xwin=kwin, 
+                 wmat=None, pairwin=None, ellwin=None, kwinmin=None, kwinmax=None, nmocks_cov=None):
+        super().__init__(pair, Bell, cov, nbar, cosmo_fid, xmin=kmin, xmax=kmax, wmat=wmat, xwin=pairwin, 
                          xwinmin=kwinmin, xwinmax=kwinmax, nmocks_cov=nmocks_cov)
         if not Mpc_units:
             assert getattr(self, 'h_fid') is not None, "h value is required to convert to Mpc units"
@@ -184,10 +184,13 @@ class BispectrumSugiyamaMultipoles(Observable):
             self.nbar = self.nbar * self.h_fid**3 if self.nbar is not None else None
             if cov is not None:
                 self.cov = self.cov / self.h_fid**12
+            if self.xwin is not None:
+                self.xwin = [xwini * self.h_fid for xwini in self.xwin] 
         self.pair = self.x
         self.Bell = self.y
         self.ell = ell
         self.ellwin = ellwin
+        self.pairwin = self.xwin
     
     def plot(self, ax=None, h_units=False, **kwargs):
         import matplotlib.pyplot as plt
