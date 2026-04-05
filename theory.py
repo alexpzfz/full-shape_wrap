@@ -188,44 +188,40 @@ class COMET(comet, BaseModel):
         return preds
 
     def predict_bispectrum_X_multipoles(self, observables, params, diagram, de_model):
-        ell_all = list(set([ll for obs in observables for ll in obs.ell]))
-        
+        ell_all = list(set([ll for obs in observables for ll in (obs.ell if obs.ellwin is not None else obs.ell)])) 
         is_scoccimarro = hasattr(observables[0], 'tri')
         
         if is_scoccimarro:
-            coord_concat = np.concatenate([obs.tri for obs in observables], axis=0)
+            coord_arragys = [np.concatenate(obs.tri) if obs.xwin is None else np.concatenate(obs.triwin) for obs in observables]
         else:
-            coord_concat = np.concatenate([obs.pair for obs in observables], axis=0)
-            
-        coord_unique, idx_inverse = np.unique(coord_concat, axis=0, return_inverse=True)
+            coord_arragys = [np.concatenate(obs.pair) if obs.xwin is None else np.concatenate(obs.pairwin) for obs in observables]
 
+        coord_all = np.unique(np.concatenate(coord_arragys), axis=0)     
+        
         if is_scoccimarro:
-            bX_batched = self.BX_ell_scoccimarro(coord_unique, params, ell_all, diagram, de_model=de_model)
+            bX_batched = self.BX_ell_scoccimarro(coord_all, params, ell_all, diagram, de_model=de_model)
         else:
-            bX_batched = self.BX_ell_sugiyama(coord_unique, params, ell_all, diagram, de_model=de_model)
+            bX_batched = self.BX_ell_sugiyama(coord_all, params, ell_all, diagram, de_model=de_model)
             
         preds = []
         is_batched = isinstance(params.get('z'), (list, np.ndarray)) and len(params['z']) > 1
         
-        idx_start = 0
         for obs in observables:
             iz = list(params['z']).index(obs.cosmo_fid['z']) if is_batched else None
-            ncoord = len(obs.tri) if is_scoccimarro else len(obs.pair)
-            idx = idx_inverse[idx_start:idx_start+ncoord]
-            idx_start += ncoord
-            
+            coord = obs.tri if is_scoccimarro and obs.xwin is None else (obs.triwin if is_scoccimarro else (obs.pair if obs.xwin is None else obs.pairwin))
+            ell = obs.ell if obs.ellwin is None else obs.ellwin 
             bX_z = []
             for i, ell in enumerate(obs.ell):
                 ell_key = f'ell{ell}' if is_scoccimarro else f'{ell}'
-                
-                bX_slice = bX_batched[ell_key][idx, ..., iz] if is_batched else bX_batched[ell_key][idx]
-                bX_z.append(bX_slice)
-                
-            bX_z = np.concatenate(bX_z, axis=0)
+                idx = np.array([np.where((coord_all == c).all(axis=1))[0][0] for c in coord[i]])
+                bX_slice = bX_batched[ell_key][idx]
+                if is_batched:
+                    bX_slice = bX_slice[:, iz]
+                bX_z.append(bX_slice) 
+            bX_z = np.concatenate(bX_z)
             
-            if getattr(obs, 'xwin', None) is not None:
-                bX_z = np.einsum('ij,jk->ik', obs.wmat, bX_z) if bX_z.ndim == 2 else obs.wmat @ bX_z
-                
+            if obs.xwin is not None:
+                bX_z = obs.wmat @ bX_z
             preds.append(bX_z)
             
         return preds
