@@ -160,6 +160,77 @@ class COMET(comet, BaseModel):
             
         return preds
 
+    def predict_bispectrum_sugiyama_multipoles(self, observables, params, de_model):
+        ell_all = list(set([ll for obs in observables for ll in obs.ell]))
+        pair_concat = np.concatenate([obs.pair for obs in observables], axis=0)
+        pair_unique, idx_inverse = np.unique(pair_concat, axis=0, return_inverse=True)
+
+        bk_batched = self.Bell_sugiyama(pair_unique, params, ell_all, de_model=de_model)
+        
+        preds = []
+        is_batched = isinstance(params.get('z'), (list, np.ndarray)) and len(params['z']) > 1
+        
+        idx_start = 0
+        for obs in observables:
+            iz = list(params['z']).index(obs.cosmo_fid['z']) if is_batched else None
+            npair = len(obs.pair)
+            idx = idx_inverse[idx_start:idx_start+npair]
+            idx_start += npair
+            
+            bk_z = []
+            for i, ell in enumerate(obs.ell):
+                # Note: Bell_sugiyama returns keys formatted as '{ell}', not 'ell{ell}'
+                bk_slice = bk_batched[f'{ell}'][idx]
+                if is_batched:
+                    bk_slice = bk_slice[:, iz]
+                bk_z.append(bk_slice)
+            preds.append(np.concatenate(bk_z))
+            
+        return preds
+
+    def predict_bispectrum_X_multipoles(self, observables, params, diagram, de_model):
+        ell_all = list(set([ll for obs in observables for ll in obs.ell]))
+        
+        is_scoccimarro = hasattr(observables[0], 'tri')
+        
+        if is_scoccimarro:
+            coord_concat = np.concatenate([obs.tri for obs in observables], axis=0)
+        else:
+            coord_concat = np.concatenate([obs.pair for obs in observables], axis=0)
+            
+        coord_unique, idx_inverse = np.unique(coord_concat, axis=0, return_inverse=True)
+
+        if is_scoccimarro:
+            bX_batched = self.BX_ell_scoccimarro(coord_unique, params, ell_all, diagram, de_model=de_model)
+        else:
+            bX_batched = self.BX_ell_sugiyama(coord_unique, params, ell_all, diagram, de_model=de_model)
+            
+        preds = []
+        is_batched = isinstance(params.get('z'), (list, np.ndarray)) and len(params['z']) > 1
+        
+        idx_start = 0
+        for obs in observables:
+            iz = list(params['z']).index(obs.cosmo_fid['z']) if is_batched else None
+            ncoord = len(obs.tri) if is_scoccimarro else len(obs.pair)
+            idx = idx_inverse[idx_start:idx_start+ncoord]
+            idx_start += ncoord
+            
+            bX_z = []
+            for i, ell in enumerate(obs.ell):
+                ell_key = f'ell{ell}' if is_scoccimarro else f'{ell}'
+                
+                bX_slice = bX_batched[ell_key][idx, ..., iz] if is_batched else bX_batched[ell_key][idx]
+                bX_z.append(bX_slice)
+                
+            bX_z = np.concatenate(bX_z, axis=0)
+            
+            if getattr(obs, 'xwin', None) is not None:
+                bX_z = np.einsum('ij,jk->ik', obs.wmat, bX_z) if bX_z.ndim == 2 else obs.wmat @ bX_z
+                
+            preds.append(bX_z)
+            
+        return preds
+
     def PX_ell_extra(self, k, params, ell, diagram, de_model):
         if not isinstance(k, list):
             k_all = k

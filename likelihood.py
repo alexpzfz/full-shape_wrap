@@ -184,11 +184,11 @@ class Likelihood:
         if observable.__class__.__name__ == 'PowerSpectrumMultipoles':
             return self.get_design_matrix_pk(params, cache, iz)
         elif 'Bispectrum' in observable.__class__.__name__:
-            return self.get_design_matrix_bk(params, observable)
+            return self.get_design_matrix_bk(params, cache, iz)
         elif observable.__class__.__name__ == 'JointObservable':
-            dm_pk = self.get_design_matrix_pk(params, cache, self.observables[0])
-            dm_bk = self.get_design_matrix_bk(params, self.observables[1])
-            return self.join_design_matrices(dm_pk, dm_bk)
+            dm_pk = self.get_design_matrix_pk(params, cache, iz)
+            dm_bk = self.get_design_matrix_bk(params, cache, iz)
+            return self.join_design_matrices(dm_pk, dm_bk, iz)
     
 
     def get_design_matrix_pk(self, params, cache, iz):
@@ -199,7 +199,8 @@ class Likelihood:
             return name.rsplit('_', 1)[0]
 
         am_params_iz = [p for p in self.am_params[iz] if _base_param_name(p) not in _bispec_only_params]
-        observable = self.observables[iz]
+        full_observable = self.observables[iz]
+        observable = full_observable.observables[0] if full_observable.__class__.__name__ == 'JointObservable' else full_observable
         comet_params = self.params.get_comet_dict(params)
         design_mat = np.zeros((observable.n_data, len(am_params_iz)))
         if cache is None:
@@ -222,7 +223,8 @@ class Likelihood:
                 bx = factor # Apply reparametrization factor if needed
             
             if base_name not in cache:
-                cache[base_name] = self.emu.predict_power_spectrum_X_multipoles(self.observables, comet_params, diag_to_marg, de_model=self.de_model)
+                pk_observables = [obs.observables[0] if obs.__class__.__name__ == 'JointObservable' else obs for obs in self.observables]
+                cache[base_name] = self.emu.predict_power_spectrum_X_multipoles(pk_observables, comet_params, diag_to_marg, de_model=self.de_model)
             px_ell = cache[base_name][iz]
 
             nx = px_ell.ndim
@@ -233,47 +235,61 @@ class Likelihood:
             design_mat[:, i] = m_vec
         return design_mat
     
-    def get_design_matrix_bk(self, params, observable):
+    def get_design_matrix_bk(self, params, cache, iz):
         _allowed_params = ['NP0', 'NB0', 'MB0']
-        am_params = [param for param in self.am_params if param in _allowed_params or param.replace('_r', '') in _allowed_params]
+        def _base_param_name(name):
+            if '_r_' in name:
+                return name.split('_r_')[0]
+            return name.rsplit('_', 1)[0]
+
+        am_params_iz = [param for param in self.am_params[iz] if _base_param_name(param) in _allowed_params]
+        full_observable = self.observables[iz]
+        observable = full_observable.observables[1] if full_observable.__class__.__name__ == 'JointObservable' else full_observable
+
         comet_params = self.params.get_comet_dict(params)
-        design_mat = np.zeros((observable.n_data, len(am_params)))
-        xeval = observable.xwin if observable.xwin is not None else observable.x
-        convol = observable.xwin is not None
+        design_mat = np.zeros((observable.n_data, len(am_params_iz)))
+        if cache is None:
+            cache = {}
     
-        for i, param in enumerate(am_params):
-            if param.endswith('_r'):
-                param_base = param.replace('_r', '')
+        for i, param in enumerate(am_params_iz):
+            base_name = _base_param_name(param)
+            if '_r_' in param:
                 factor = self.params.get_reparam_factor(params, param)
             else:
-                param_base = param
                 factor = 1.0
 
-            diag_to_marg = 'B_' + param_base
-            if observable.__class__.__name__ == 'BispectrumScoccimarroMultipoles':
-                bx_ell = self.emu.BX_ell_scoccimarro(xeval, comet_params, observable.ell, diagram=diag_to_marg, de_model=self.de_model)
-                m_list = [factor * bx_ell[f'ell{l}'] for l in observable.ell]
-            elif observable.__class__.__name__ == 'BispectrumSugiyamaMultipoles':
-                bx_ell = self.emu.BX_ell_sugiyama(xeval, comet_params, ell=observable.ell, diagram=diag_to_marg, de_model=self.de_model)
-                m_list = [factor * bx_ell[f'{l}'] for l in observable.ell]
-            m_vec = np.concatenate(m_list)
+            diag_to_marg = 'B_' + base_name
+            
+            if diag_to_marg not in cache:
+                bk_observables = [obs.observables[1] if obs.__class__.__name__ == 'JointObservable' else obs for obs in self.observables]
+                cache[diag_to_marg] = self.emu.predict_bispectrum_X_multipoles(bk_observables, comet_params, diag_to_marg, de_model=self.de_model)
+            
+            m_vec = factor * cache[diag_to_marg][iz]
             design_mat[:, i] = m_vec
+            
         return design_mat
 
-    def join_design_matrices(self, dm_pk, dm_bk):
+    def join_design_matrices(self, dm_pk, dm_bk, iz):
         _bispec_only_params = ['NB0', 'MB0']
-        am_pk = [param for param in self.am_params if  param not in _bispec_only_params and param.replace('_r', '') not in _bispec_only_params]
+        def _base_param_name(name):
+            if '_r_' in name:
+                return name.split('_r_')[0]
+            return name.rsplit('_', 1)[0]
+
+        am_params_iz = self.am_params[iz]
+        am_pk = [param for param in am_params_iz if _base_param_name(param) not in _bispec_only_params]
         NP0_pk_idx = None
-        if 'NP0' in am_pk:
-            NP0_pk_idx = am_pk.index('NP0')
-        elif 'NP0_r' in am_pk:
-            NP0_pk_idx = am_pk.index('NP0_r')
-        am_bk = [param for param in self.am_params if param not in am_pk or (param.replace('_r', '') == 'NP0')]
+        for i, p in enumerate(am_pk):
+            if _base_param_name(p) == 'NP0':
+                NP0_pk_idx = i
+                break
+                
+        am_bk = [param for param in am_params_iz if param not in am_pk or _base_param_name(param) == 'NP0']
         NP0_bk_idx = None
-        if 'NP0' in am_bk:
-            NP0_bk_idx = am_bk.index('NP0')
-        elif 'NP0_r' in am_bk:
-            NP0_bk_idx = am_bk.index('NP0_r')
+        for i, p in enumerate(am_bk):
+            if _base_param_name(p) == 'NP0':
+                NP0_bk_idx = i
+                break
          
         ny_pk = dm_pk.shape[0]
         ny_bk = dm_bk.shape[0]
