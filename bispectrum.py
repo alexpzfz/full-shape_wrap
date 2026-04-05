@@ -6,6 +6,12 @@ def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs):
     params = emu.params
     nbar = emu.nbar
     b1, b2, g2, f = params['b1'], params['b2'], params['g2'], params['f']
+    
+    is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
+    if is_batched:
+        k1, k2, k3 = k1[..., None], k2[..., None], k3[..., None]
+        mu1, mu2 = mu1[..., None], mu2[..., None]
+        
     # Apply AP effect
     qpar, qperp = params['q_lo'], params['q_tr']
     qiso6 = qpar**2 * qperp**4
@@ -17,9 +23,18 @@ def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs):
     k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
     kunique = np.unique(k_all)
     pdw = emu.Pdw(kunique, comet_params, mu=0.6, **kwargs)
-    pdw1 = pdw[np.searchsorted(kunique, k1_p)]
-    pdw2 = pdw[np.searchsorted(kunique, k2_p)]
-    pdw3 = pdw[np.searchsorted(kunique, k3_p)]
+    
+    is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
+    if is_batched:
+        nz = len(comet_params['z'])
+        batch_idx = np.arange(nz)
+        pdw1 = pdw[np.searchsorted(kunique, k1_p), batch_idx]
+        pdw2 = pdw[np.searchsorted(kunique, k2_p), batch_idx]
+        pdw3 = pdw[np.searchsorted(kunique, k3_p), batch_idx]
+    else:
+        pdw1 = pdw[np.searchsorted(kunique, k1_p)]
+        pdw2 = pdw[np.searchsorted(kunique, k2_p)]
+        pdw3 = pdw[np.searchsorted(kunique, k3_p)]
     
     # tree level first
     btree = tree_term(k1_p, k2_p, mu1_p, mu2_p, k3_p, mu3_p, b1, b2, g2, f) * pdw1 * pdw2 + \
@@ -73,11 +88,19 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[0, 2], **kwa
     mu12 = np.clip(mu12, -1, 1)
     mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi)
     # reshape everything to be (ntri, nmu, nphi)
-    bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs) # shape (ntri, nmu, nphi)
+    bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs) # shape (ntri, nmu, nphi) or (ntri, nmu, nphi, nz)
     res = {}
+    is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
+    
     for ll in ell:
         lell = legendre(ll)(mu1) # shape (1, nmu, 1)
-        integral = np.sum(bfull * lell * w_mu[None, :, None] * w_phi, axis=(1, 2)) # shape (ntri,)
+        if is_batched:
+            lell = lell[..., None]
+            weights = w_mu[None, :, None, None] * w_phi
+        else:
+            weights = w_mu[None, :, None] * w_phi
+            
+        integral = np.sum(bfull * lell * weights, axis=(1, 2)) # shape (ntri,) or (ntri, nz)
         bell = (2*ll + 1) * integral / (4 * np.pi)
         res[f'ell{ll}'] = bell
     return res
@@ -105,14 +128,22 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=['000'], **kwargs):
     # get mu2 using the Scoccimarro coordinate system
     mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi) # shape (n, nmu1, nmu12, nphi)
     
-    bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs) # shape (n, nmu1, nmu2, nphi)
+    bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs) # shape (n, nmu1, nmu2, nphi) or (n, ..., nz)
     proj_ops = get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_phi, mu1, mu12, phi)
     
-    # Reshape bfull to (n, nmu1 * nmu12 * nphi) for a blazing fast BLAS matrix-vector product
-    bfull_flat = bfull.reshape(n, -1)
+    is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
     res = {}
-    for ll in ell:
-        res[f'{ll}'] = bfull_flat @ proj_ops[f'{ll}']
+    
+    if is_batched:
+        nz = len(comet_params['z'])
+        bfull_flat = bfull.reshape(n, -1, nz)
+        for ll in ell:
+            res[f'{ll}'] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[f'{ll}'])
+    else:
+        # Reshape bfull to (n, nmu1 * nmu12 * nphi) for a blazing fast BLAS matrix-vector product
+        bfull_flat = bfull.reshape(n, -1)
+        for ll in ell:
+            res[f'{ll}'] = bfull_flat @ proj_ops[f'{ll}']
 
     return res
 
@@ -164,9 +195,16 @@ def bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, **kwargs):
         NP0, MB0, NB0 = 0, 1, 0
     elif diagram == 'B_NB0':
         bstoch = np.ones_like(k1) * np.ones_like(mu1) * np.ones_like(mu2)
+        if isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1:
+            bstoch = bstoch[..., None]
         btosch = bstoch / (qiso6 * nbar**2)
         return btosch
      
+    is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
+    if is_batched:
+        k1, k2, k3 = k1[..., None], k2[..., None], k3[..., None]
+        mu1, mu2 = mu1[..., None], mu2[..., None]
+
     mu3 = np.where(k3 > 0, - (mu1 * k1 + mu2 * k2) / k3, -1.0)
     k1_p, mu1_p = apply_ap(k1, mu1, qpar, qperp) 
     k2_p, mu2_p = apply_ap(k2, mu2, qpar, qperp)
@@ -175,9 +213,18 @@ def bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, **kwargs):
     k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
     kunique = np.unique(k_all)
     pdw = emu.Pdw(kunique, comet_params, mu=0.6, **kwargs)
-    pdw1 = pdw[np.searchsorted(kunique, k1_p)]
-    pdw2 = pdw[np.searchsorted(kunique, k2_p)]
-    pdw3 = pdw[np.searchsorted(kunique, k3_p)]
+    
+    is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
+    if is_batched:
+        nz = len(comet_params['z'])
+        batch_idx = np.arange(nz)
+        pdw1 = pdw[np.searchsorted(kunique, k1_p), batch_idx]
+        pdw2 = pdw[np.searchsorted(kunique, k2_p), batch_idx]
+        pdw3 = pdw[np.searchsorted(kunique, k3_p), batch_idx]
+    else:
+        pdw1 = pdw[np.searchsorted(kunique, k1_p)]
+        pdw2 = pdw[np.searchsorted(kunique, k2_p)]
+        pdw3 = pdw[np.searchsorted(kunique, k3_p)]
     
     bstoch = stoch_term(k1_p, mu1_p, b1, f, avir, sv, MB0, NP0) * pdw1 + \
              stoch_term(k2_p, mu2_p, b1, f, avir, sv, MB0, NP0) * pdw2 + \
@@ -198,14 +245,27 @@ def bX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
     mu12 = np.clip(mu12, -1, 1)
     mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi)
     bfull = bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, **kwargs) # shape (ntri, nmu, nphi)
+    
+    is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
+    
     if diagram == 'B_NB0':
-        b0 = np.ones(k1.shape[0]) * bfull[0, 0, 0]
+        if is_batched:
+            b0 = np.ones((k1.shape[0], len(comet_params['z']))) * bfull[0, 0, 0, :]
+        else:
+            b0 = np.ones(k1.shape[0]) * bfull[0, 0, 0]
         res = {f'ell{ll}': b0 if ll == 0 else np.zeros_like(b0) for ll in ell}
         return res
+        
     res = {}
     for ll in ell:
         lell = legendre(ll)(mu1) # shape (1, nmu, 1)
-        integral = np.sum(bfull * lell * w_mu[None, :, None] * w_phi, axis=(1, 2)) # shape (ntri,)
+        if is_batched:
+            lell = lell[..., None]
+            weights = w_mu[None, :, None, None] * w_phi
+        else:
+            weights = w_mu[None, :, None] * w_phi
+            
+        integral = np.sum(bfull * lell * weights, axis=(1, 2)) # shape (ntri,) or (ntri, nz)
         bell = (2*ll + 1) * integral / (4 * np.pi)
         res[f'ell{ll}'] = bell
     return res
@@ -230,8 +290,14 @@ def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, **kwargs):
     
     bfull = bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram=diagram,
                   **kwargs) # shape (ntri, nmu1, nmu12, nphi)
+                  
+    is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
+    
     if diagram == 'B_NB0':
-        b0 = np.ones(k1.shape[0]) * bfull[0, 0, 0, 0]
+        if is_batched:
+            b0 = np.ones((k1.shape[0], len(comet_params['z']))) * bfull[0, 0, 0, 0, :]
+        else:
+            b0 = np.ones(k1.shape[0]) * bfull[0, 0, 0, 0]
         res = {f'{ll}': b0 if ll == '000' else np.zeros_like(b0) for ll in ell}
         return res
 
@@ -245,10 +311,17 @@ def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, **kwargs):
                                        mu1=mu1,
                                        mu12=mu12,
                                        phi=phi)
-    bfull_flat = bfull.reshape(bfull.shape[0], -1)
+                                       
     res = {}
-    for ll in ell:
-        res[f'{ll}'] = bfull_flat @ proj_ops[f'{ll}']
+    if is_batched:
+        nz = len(comet_params['z'])
+        bfull_flat = bfull.reshape(bfull.shape[0], -1, nz)
+        for ll in ell:
+            res[f'{ll}'] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[f'{ll}'])
+    else:
+        bfull_flat = bfull.reshape(bfull.shape[0], -1)
+        for ll in ell:
+            res[f'{ll}'] = bfull_flat @ proj_ops[f'{ll}']
     return res
 
 
