@@ -11,22 +11,65 @@ class BaseModel:
     
     def predict(self, observables, params, **kwargs):
         """Predict the observable given the parameters
-           This method should return a 1D array of the same length as the data vector of the observable
+           This method should return a  list 1D arrayy of the same length as the data vector of the observables.
         """
         if not isinstance(observables, list):
             observables = [observables]
-        if isinstance(observables[0], PowerSpectrumMultipoles):
-            return self.predict_power_spectrum_multipoles(observables, params, **kwargs)
-        elif isinstance(observables[0], BispectrumScoccimarroMultipoles):
-            return self.predict_bispectrum_scoccimarro_multipoles(observables, params, **kwargs)
-        elif isinstance(observables[0], BispectrumSugiyamaMultipoles):
-            return self.predict_bispectrum_sugiyama_multipoles(observables, params, **kwargs)
-        elif isinstance(observables[0], JointObservable):
-            obs1_list = [o.observables[0] for o in observables]
-            obs2_list = [o.observables[1] for o in observables]
-            preds1 = self.predict(obs1_list, params, **kwargs)
-            preds2 = self.predict(obs2_list, params, **kwargs)
-            return [np.concatenate((p1, p2)) for p1, p2 in zip(preds1, preds2)]
+
+        grouped = {
+            'pk': [],
+            'bk_scocc': [],
+            'bk_sugiyama': [],
+        }
+
+        def add(group_name, observable):
+            grouped[group_name].append(observable)
+            return len(grouped[group_name]) - 1
+
+        assembly_plan = []
+        for obs in observables:
+            if isinstance(obs, PowerSpectrumMultipoles):
+                assembly_plan.append(('single', 'pk', add('pk', obs)))
+            elif isinstance(obs, BispectrumScoccimarroMultipoles):
+                assembly_plan.append(('single', 'bk_scocc', add('bk_scocc', obs)))
+            elif isinstance(obs, BispectrumSugiyamaMultipoles):
+                assembly_plan.append(('single', 'bk_sugiyama', add('bk_sugiyama', obs)))
+            elif isinstance(obs, JointObservable):
+                pk_idx = add('pk', obs.observables[0])
+                bk_obs = obs.observables[1]
+                if isinstance(bk_obs, BispectrumScoccimarroMultipoles):
+                    bk_group = 'bk_scocc'
+                elif isinstance(bk_obs, BispectrumSugiyamaMultipoles):
+                    bk_group = 'bk_sugiyama'
+                else:
+                    raise ValueError(f"Unsupported observable type in JointObservable: {type(bk_obs)}")
+                bk_idx = add(bk_group, bk_obs)
+                assembly_plan.append(('joint', pk_idx, bk_group, bk_idx))
+            else:
+                raise ValueError(f"Unsupported observable type: {type(obs)}")
+
+        predictions = {
+            'pk': self.predict_power_spectrum_multipoles(grouped['pk'], params, **kwargs) if grouped['pk'] else [],
+            'bk_scocc': self.predict_bispectrum_scoccimarro_multipoles(grouped['bk_scocc'], params, **kwargs) if grouped['bk_scocc'] else [],
+            'bk_sugiyama': self.predict_bispectrum_sugiyama_multipoles(grouped['bk_sugiyama'], params, **kwargs) if grouped['bk_sugiyama'] else [],
+        }
+
+        pred = []
+        for item in assembly_plan:
+            if item[0] == 'single':
+                _, group_name, idx = item
+                pred.append(predictions[group_name][idx])
+            else:
+                _, pk_idx, bk_group, bk_idx = item
+                pred.append(np.concatenate([predictions['pk'][pk_idx], predictions[bk_group][bk_idx]]))
+        return pred
+        
+    def predict_power_spectrum_multipoles(self, observables, params, **kwargs):
+        raise NotImplementedError
+    def predict_bispectrum_scoccimarro_multipoles(self, observables, params, **kwargs):
+        raise NotImplementedError
+    def predict_bispectrum_sugiyama_multipoles(self, observables, params, **kwargs):
+        raise NotImplementedError
         
 
 class COMET(comet, BaseModel):
