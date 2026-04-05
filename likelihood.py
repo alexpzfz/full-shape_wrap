@@ -5,16 +5,13 @@ import params
 class Likelihood:
     """Base class for likelihoods"""
     def __init__(self, observables, emu, params, am_params=None,
-                 am_sample = True, am_from_comet=False, conditional_prior=None):
+                 am_sample = True, conditional_prior=None):
         self.observables = observables if isinstance(observables, list) else [observables]
         # sort observables by redshift
-        print("Sorting observables by redshift...")
-        self.observables.sort(key=lambda obs: obs.cosmo_fid['z'])
+        if len(self.observables) > 1:
+            print("Sorting observables by redshift...")
+            self.observables.sort(key=lambda obs: obs.cosmo_fid['z'])
 
-        # if self.observable.__class__.__name__ == 'JointObservable':
-        #     self.observables = observable.observables
-        # else:
-        #     self.observables = [observable]
         self.nobservables = len(self.observables)
     
         self.covs = [obs.cov for obs in self.observables]
@@ -52,9 +49,18 @@ class Likelihood:
             self.am_inv_cov = []
             self.am_det_cov = []
 
+            def _am_base_param_name(name):
+                if '_r_' in name:
+                    return name.split('_r_')[0]
+                return name.rsplit('_', 1)[0]
+
+            _bispec_only_params = {'NB0', 'MB0'}
+
             base_am_params = am_params if isinstance(am_params, list) else [am_params]
             for iz in range(self.nobservables):
                 am_iz = [f"{param}_{iz}" for param in base_am_params]
+                if self.observables[iz].__class__.__name__ == 'PowerSpectrumMultipoles':
+                    am_iz = [p for p in am_iz if _am_base_param_name(p) not in _bispec_only_params]
                 self.am_params.append(am_iz)
                 for param in am_iz:
                     self.params.parameters[param].value = 0.0
@@ -97,44 +103,12 @@ class Likelihood:
             #         self.params.parameters[am_param_base].derived = False
                     
         
-            # # for the moment we use comet's chi2 function for AM
-            # if am_from_comet:
-            #     n_realizations = observable.nmocks_cov if observable.nmocks_cov is not None else None
-            #     theory_cov = True if self.nmocks_cov is None else False
-            #     emu.define_data_set(obs_id='pk', bins=observable._k, signal=observable._Pell.T, cov=observable._cov,
-            #                         theory_cov=theory_cov, n_realizations=n_realizations, zeff=observable.cosmo_fid['z'],
-            #                         fiducial_cosmology=observable.cosmo_fid)
-            #     self.am_priors = {am_param: self.params.parameters[am_param].prior for am_param in self.am_params}
-
             # self.do_am = True
             # self.do_am = True
             # self.am_params_0 = np.array([self.params.parameters[am_param].prior[0] for am_param in self.am_params])
             # self.am_inv_cov = np.diag([1/self.params.parameters[am_param].prior[1]**2 for am_param in self.am_params])
             # self.am_det_cov = np.prod([self.params.parameters[am_param].prior[1]**2 for am_param in self.am_params])
             
-        # if observable.__class__ == PowerSpectrumMultipoles:
-        #     self.get_chi2 = self._get_chi2_powerspectrum
-        #     if self.do_am:
-        #         #self.get_chi2 = self._get_chi2_am_from_comet
-        #         self.get_chi2 = self._get_chi2_powerspectrum_am
-        #         if am_from_comet:
-        #             self.get_chi2 = self._get_chi2_am_from_comet
-
-        # if self.conditional_prior is not None:
-        #     old_get_chi2 = self.get_chi2
-        #     def get_chi2_with_prior(params):
-        #         if not self.conditional_prior(params):
-        #             return np.inf  # Return infinite chi2 if prior condition is not satisfied
-        #         return old_get_chi2(params)
-        #     self.get_chi2 = get_chi2_with_prior
-
-     
-        # if self.params.fixed_cosmo:
-        #     print("All cosmological parameters are fixed. Likelihood will only depend on nuisance parameters.")
-        #     self.pell_func = emu.Pell_fixed_cosmo_boost
-        # else:
-        #     self.pell_func = emu.Pell
-
     def _rescale_covariance(self, mode='Hartlap'):
         for i, obs in enumerate(self.observables):
             n_data = obs.n_data
@@ -148,35 +122,7 @@ class Likelihood:
                 self.covs[i] *= 1/factor
         #self.icov *= factor
 
-    # def _get_chi2_powerspectrum(self, params):
-    #     comet_params = self.params.get_comet_dict(params)
-    #     pred = self.emu.Pell(self.x, params=comet_params, ell=self.observable.ell, de_model=self.de_model)
-    #     y_model = np.concatenate([pred[f'ell{l}'] for l in self.observable.ell])
-    #     delta = self.y - y_model
-    #     chi2 = np.dot(delta, np.dot(self.icov, delta))
-    #     return chi2
-
-    # def _get_chi2_powerspectrum_am(self, params):
-    #     comet_params = self.params.get_comet_dict(params)
-    #     pred = self.emu.Pell(self.x, params=comet_params, ell=self.observable.ell, de_model=self.de_model)
-    #     y_model = np.concatenate([pred[f'ell{l}'] for l in self.observable.ell])
-    #     delta = self.y - y_model
-    #     dm = self.get_design_matrix_ps(params)
-    #     if not self.am_sample:
-    #         chi2 = self.marg_chi2(delta, self.icov, self.am_params_0, self.am_inv_cov, self.am_det_cov, dm)
-    #     else:
-    #         chi2, cond_mean, cond_cov = self.marg_chi2(delta, self.icov, self.am_params_0, self.am_inv_cov,
-    #                                                     self.am_det_cov, dm, return_cond_mean_cov=True)
-    #         self.sample_cond_am(params, cond_mean, cond_cov, mode=self.am_sample_mode) 
-
-    #     return chi2
-
-    # def _get_chi2_am_from_comet(self, params):
-    #     comet_params = self.params.get_comet_dict(params)
-    #     chi2 = self.emu.chi2(obs_id='pk', params=comet_params, kmax=self.observable._kmax, de_model=self.de_model, AM_priors=self.am_priors)
-    #     chi2 = float(chi2)  # Ensure chi2 is a scalar float, not a 0-dim array
-    #     return chi2
-    
+ 
     def get_chi2(self, params):
         if self.conditional_prior is not None and not self.conditional_prior(params):
             return np.inf  # Return infinite chi2 if prior condition is not satisfied
@@ -184,12 +130,14 @@ class Likelihood:
         preds = self.emu.predict(self.observables, comet_params, de_model=self.de_model)
 
         total_chi2 = 0.0
+        dm_cache = {} if self.do_am else None
         for i, obs in enumerate(self.observables):
             delta = self.ys[i] - preds[i]
             if not self.do_am:
                 chi2 = get_bCib(self.lcovs[i], delta)
             else:
-                dm_iz = self.get_design_matrix(params, i)  # This should be modified to get the correct design matrix for each observable if needed
+
+                dm_iz = self.get_design_matrix(params, dm_cache, i)  # This should be modified to get the correct design matrix for each observable if needed
                 if not self.am_sample:
                     chi2 = self.marg_chi2(delta, self.lcovs[i], self.am_params_0[i], self.am_inv_cov[i], self.am_det_cov[i], dm_iz)
                 else:
@@ -221,7 +169,7 @@ class Likelihood:
         chi2 =  get_bCib(dcov_chol, res)
         chi2 = chi2  - get_bCib(lamb_chol, b)
         chi2 = chi2 + np.log(np.abs(detlamb)) + np.log(np.abs(detpcov))  # Include detpcov in log
-        chi2 = chi2[0][0] if lamb.shape[0] == 1 else chi2  # If lamb is 1D, return scalar chi2 
+        chi2 = float(np.asarray(chi2)) if lamb.shape[0] == 1 else chi2  # If lamb is 1D, return scalar chi2
         if return_cond_mean_cov:
             # cond_mean = lamb_inv @ (b + pcov_inv @ p0_vec)
             # cond_cov = lamb_inv
@@ -231,34 +179,34 @@ class Likelihood:
         return chi2
     
 
-    def get_design_matrix(self, params, iz):
+    def get_design_matrix(self, params, cache, iz):
         observable = self.observables[iz]
         if observable.__class__.__name__ == 'PowerSpectrumMultipoles':
-            return self.get_design_matrix_pk(params, iz)
+            return self.get_design_matrix_pk(params, cache, iz)
         elif 'Bispectrum' in observable.__class__.__name__:
             return self.get_design_matrix_bk(params, observable)
         elif observable.__class__.__name__ == 'JointObservable':
-            dm_pk = self.get_design_matrix_pk(params, self.observables[0])
+            dm_pk = self.get_design_matrix_pk(params, cache, self.observables[0])
             dm_bk = self.get_design_matrix_bk(params, self.observables[1])
             return self.join_design_matrices(dm_pk, dm_bk)
     
 
-    def get_design_matrix_pk(self, params, iz):
+    def get_design_matrix_pk(self, params, cache, iz):
         _bispec_only_params = ['NB0', 'MB0']
-        am_params_iz = [p for p in self.am_params[iz] if p not in _bispec_only_params and p.replace('_r', '') not in _bispec_only_params]
+        def _base_param_name(name):
+            if '_r_' in name:
+                return name.split('_r_')[0]
+            return name.rsplit('_', 1)[0]
+
+        am_params_iz = [p for p in self.am_params[iz] if _base_param_name(p) not in _bispec_only_params]
         observable = self.observables[iz]
-        comet_params_batched = self.params.get_comet_dict(params)
-        is_batched = isinstance(comet_params_batched.get('z'), (list, np.ndarray))
-        # if is_batched:
-        #     comet_params_iz = {k: v[iz] if isinstance(v, (list, np.ndarray)) else v for k, v in comet_params_batched.items()}
-        # else:
-        #     comet_params_iz = comet_params_batched
+        comet_params = self.params.get_comet_dict(params)
         design_mat = np.zeros((observable.n_data, len(am_params_iz)))
-        xeval = observable.xwin if observable.xwin is not None else observable.x
-        elleval = observable.ell if observable.xwin is None else observable.ellwin
-        convol = observable.xwin is not None
+        if cache is None:
+            cache = {}
+
         for i, param in enumerate(am_params_iz):
-            base_name = param.split('_')[0]
+            base_name = _base_param_name(param)
             if '_r_' in param:
                 factor = self.params.get_reparam_factor(params, param)
             else:
@@ -266,28 +214,22 @@ class Likelihood:
 
             if base_name not in ['a0', 'a2', 'a4']: 
                 diag_to_marg = self.emu.diagrams_to_marg[base_name]
-                bx = self.emu._get_bias_coeff_for_AM(diag_to_marg)
-                
+                bx = self.emu._get_bias_coeff_for_AM(diag_to_marg)   
                 bx = bx * factor# Apply reparametrization factor if needed
-                px_ell = self.emu.PX_ell(xeval, comet_params_batched, elleval, diag_to_marg, de_model=self.de_model)
-                if is_batched:
-                    px_ell = {key: val[... , iz] for key, val in px_ell.items()}
-                    bx = bx[..., iz]
+                bx = bx[..., iz] # Get the bias coefficient for the correct redshift bin
             else:
                 diag_to_marg = self.emu._extra_diagrams_to_marg[base_name]
                 bx = factor # Apply reparametrization factor if needed
-                px_ell = self.emu.PX_ell_extra(xeval, comet_params_batched, elleval, diag_to_marg, de_model=self.de_model)
-                if is_batched:
-                    px_ell = {key: val[... , iz] for key, val in px_ell.items()}
-                    bx = bx[..., iz]
-            nx = px_ell[f'ell0'].ndim
+            
+            if base_name not in cache:
+                cache[base_name] = self.emu.predict_power_spectrum_X_multipoles(self.observables, comet_params, diag_to_marg, de_model=self.de_model)
+            px_ell = cache[base_name][iz]
+
+            nx = px_ell.ndim
             if nx == 1:
-                m_list = [bx * px_ell[f'ell{l}'] for l in elleval]
+                m_vec = bx * px_ell
             elif nx > 1:
-                m_list = [np.sum(bx * px_ell[f'ell{l}'], axis=1) for l in elleval] 
-            m_vec = np.concatenate(m_list)
-            if convol:
-                m_vec = observable.wmat @ m_vec
+                m_vec = np.sum(bx * px_ell, axis=1)
             design_mat[:, i] = m_vec
         return design_mat
     

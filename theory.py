@@ -61,35 +61,33 @@ class COMET(comet, BaseModel):
             preds.append(pell_z)
 
         return preds
-
-    def predict_PX_ell(self, observables, params, diagram, de_model, is_extra=False):
-        ell_all = list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)]))
-        k_arrays = [np.concatenate(obs.k) if obs.kwin is None else np.concatenate(obs.kwin) for obs in observables]
-        k_all = np.unique(np.concatenate(k_arrays))
-        
-        if is_extra:
-            px_batched = self.PX_ell_extra(k_all, params, ell_all, diagram, de_model=de_model)
+    
+    def predict_power_spectrum_X_multipoles(self, observables, params, diagram, de_model):
+        ell_all =list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)]))
+        k_arrys = [np.concatenate(obs.k) if obs.kwin is None else np.concatenate(obs.kwin) for obs in observables]
+        k_all = np.unique(np.concatenate(k_arrys))
+        if  'a0' in diagram or 'a2' in diagram or 'a4' in diagram:
+            pX_batched = self.PX_ell_extra(k_all, params, ell_all, diagram, de_model=de_model)
         else:
-            px_batched = self.PX_ell(k_all, params, ell_all, diagram, de_model=de_model)
-            
-        preds = [] 
+            pX_batched = self.PX_ell(k_all, params, ell_all, diagram, de_model=de_model) 
+        preds = []
         is_batched = isinstance(params.get('z'), (list, np.ndarray)) and len(params['z']) > 1
         for obs in observables:
             iz = list(params['z']).index(obs.cosmo_fid['z']) if is_batched else None
-            if is_batched:
-                for kkx in px_batched:
-                    print(f"DEBUG PX_ell: key={kkx}, shape={px_batched[kkx].shape}, iz={iz}, len(z)={len(params['z'])}")
             k = obs.k if obs.kwin is None else obs.kwin
             ell = obs.ell if obs.ellwin is None else obs.ellwin
-            
-            px_z_dict = {}
+            pX_z = []
             for i, ll in enumerate(ell):
                 idx = np.searchsorted(k_all, k[i])
-                # We return the dictionary for this observable to build the design matrix
-                px_z_dict[f'ell{ll}'] = px_batched[f'ell{ll}'][idx, iz] if is_batched else px_batched[f'ell{ll}'][idx]
-                
-            preds.append(px_z_dict)
-            
+                # px_batched has shape (nk, ndiag, nz) if is_batched else (nk, ndiag) if diagram is a list of diagrams, otherwise (nk, nz) or (nk,)
+                pX_slice = pX_batched[f'ell{ll}'][idx,...,iz] if is_batched else pX_batched[f'ell{ll}'][idx]
+                # here pX_slice has shape (nk, ndiag) if diagram is a list of diagrams, otherwise (nk,)
+                pX_z.append(pX_slice)
+            pX_z = np.concatenate(pX_z, axis=0) # shape (sum(nk_ell), ndiag) or (sum(nk_ell),)
+        
+            if obs.xwin is not None:
+                pX_z = np.einsum('ij,jk->ik', obs.wmat, pX_z) if pX_z.ndim == 2 else obs.wmat @ pX_z
+            preds.append(pX_z)
         return preds
     
     def predict_bispectrum_scoccimarro_multipoles(self, observables, params, de_model):
@@ -129,15 +127,13 @@ class COMET(comet, BaseModel):
             k_all, idx_inverse = np.unique(k_all, return_inverse=True) 
             idx_ell = [int(np.sum([len(kk) for kk in k[:i]])) for i in range(len(k)+1)]
         mu = self.gl_x
-        # print("DEBUG q_lo len", len(self.params.get('q_lo', [])))
-        if 'q_lo' in self.params:
-            print("DEBUG: q_lo shape:", getattr(self.params['q_lo'], 'shape', type(self.params['q_lo'])), "len:", len(self.params['q_lo']))
         mu2 = self.gl_x2
         APfac = np.sqrt(
             np.divide.outer(mu2, self.params['q_lo']**2) \
             + np.divide.outer(1.0 - mu2, self.params['q_tr']**2))
         kp = np.multiply.outer(k_all, APfac) # shape (nk, nmu, 1)
         mup = np.divide.outer(mu, self.params['q_lo'])/APfac
+        #print(f"APfac shape: {APfac.shape}, kp shape: {kp.shape}, mup shape: {mup.shape}")
 
         p2d = -0.5 * self.PX_2d(kp, mup, params, 'Pctr_c0', de_model=de_model)
         p2d = p2d[0] # shape (nk, nmu, 1)
