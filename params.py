@@ -89,8 +89,8 @@ class Params:
             res = {}
             for iz in range(self.nz):
                 for p in param_list:
-                    new_name = f"{p.name}_{iz}"
-                    new_latex = add_iz_to_latex(p.latex, iz) if p.latex else ""
+                    new_name = f"{p.name}_{iz}" if self.nz > 1 else p.name
+                    new_latex = add_iz_to_latex(p.latex, iz) if self.nz > 1 and p.latex else (p.latex if p.latex else "")
                     res[new_name] = dataclasses.replace(p, name=new_name, base_name=p.name, latex=new_latex)
             return res
         
@@ -195,23 +195,23 @@ class Params:
     
     @staticmethod
     def bG2_coev(p, iz=0):
-        b1 = p[f"b1_{iz}"]
+        b1 = p.get(f"b1_{iz}", p.get("b1"))
         return 0.524 - 0.547*b1 + 0.046*b1**2
 
     @staticmethod
     def bGam3_coev(p, iz=0):
-        b1 = p[f"b1_{iz}"]
-        bG2 = p[f"bG2_{iz}"]
+        b1 = p.get(f"b1_{iz}", p.get("b1"))
+        bG2 = p.get(f"bG2_{iz}", p.get("bG2"))
         return -1./6.*(b1-1.) -5./2.*bG2
 
     @staticmethod
     def bK2_coev(p, iz=0):
-        b1 = p[f"b1_{iz}"]
+        b1 = p.get(f"b1_{iz}", p.get("b1"))
         return -2./7.*(b1 - 1.)
     
     @staticmethod
     def btd_coev(p, iz=0):
-        b1 = p[f"b1_{iz}"]
+        b1 = p.get(f"b1_{iz}", p.get("b1"))
         return 23./42.*(b1 - 1.)
 
 
@@ -393,16 +393,17 @@ class Params:
     def _reparam_bias_factor(self, p, name, iz=0):
         factor_ap = 1.0
         factor_sigmaR = 1.0
+        s_iz = f"_{iz}" if self.nz > 1 else ""
         if 'ap' in self.reparam_bias_mode:
-            factor_ap = np.sqrt(p[f'q_iso3_{iz}'])
+            factor_ap = np.sqrt(p[f'q_iso3{s_iz}'])
         if 'sigma_12' in self.reparam_bias_mode:
-            factor_sigmaR = self.sigmaR_ref[iz] / p[f'sigma_12_{iz}']
+            factor_sigmaR = self.sigmaR_ref[iz] / p[f'sigma_12{s_iz}']
 
-        if name == f'b1_r_{iz}':
+        if name == f'b1_r{s_iz}':
             return factor_sigmaR * factor_ap
-        if name in [f'b2_r_{iz}', f'b2t_r_{iz}', f'g2_r_{iz}', f'bK2_r_{iz}', f'bG2_r_{iz}']:
+        if name in [f'b2_r{s_iz}', f'b2t_r{s_iz}', f'g2_r{s_iz}', f'bK2_r{s_iz}', f'bG2_r{s_iz}']:
             return factor_sigmaR**2 * factor_ap
-        if name in [f'g21_r_{iz}', f'bGam3_r_{iz}', f'btd_r_{iz}']:
+        if name in [f'g21_r{s_iz}', f'bGam3_r{s_iz}', f'btd_r{s_iz}']:
             if self.reparam_3ordbias_power == 3.0:
                 return factor_sigmaR**3 * factor_ap
             elif self.reparam_3ordbias_power == 4.0:
@@ -410,23 +411,31 @@ class Params:
 
     def _reparam_counterterm_factor(self, p, iz=0):
         factor = 1.0
+        s_iz = f"_{iz}" if self.nz > 1 else ""
         if 'ap' in self.reparam_counterterms_mode:
-            factor *= p[f'q_iso3_{iz}']
+            factor *= p[f'q_iso3{s_iz}']
         if 'sigma_12' in self.reparam_counterterms_mode:
-            factor *= self.sigmaR_ref[iz]**2 / p[f'sigma_12_{iz}']**2
+            factor *= self.sigmaR_ref[iz]**2 / p[f'sigma_12{s_iz}']**2
         return factor
 
     def _reparam_stochastic_factor(self, p, iz=0):
         factor = 1.0
+        s_iz = f"_{iz}" if self.nz > 1 else ""
         if 'ap' in self.reparam_stochastic_mode:
-            factor *= p[f'q_iso3_{iz}']
+            factor *= p[f'q_iso3{s_iz}']
         return factor
         
     def get_reparam_factor(self, p, name):
         #remove '_r' from the name to get the base parameter name and the redshift index
-        base_name = name.rsplit('_', 2)[0]
-        iz = int(name.split('_')[-1])
-        base_name_iz = f"{base_name}_{iz}"
+        if self.nz > 1:
+            base_name = name.rsplit('_', 2)[0]
+            iz = int(name.split('_')[-1])
+            base_name_iz = f"{base_name}_{iz}"
+        else:
+            base_name = name.replace('_r', '')
+            iz = 0
+            base_name_iz = base_name
+            
         if base_name_iz in self.bias_params:
             return self._reparam_bias_factor(p, name, iz=iz)
         elif base_name_iz in self.counterterm_params:
@@ -469,21 +478,21 @@ class Params:
 
         if require_ap:
             for iz in range(self.nz):
-                name = f'q_iso3_{iz}'
-                latex = add_iz_to_latex(r"q_{\rm iso}^3", iz)
+                name = f'q_iso3_{iz}' if self.nz > 1 else 'q_iso3'
+                latex = add_iz_to_latex(r"q_{\rm iso}^3", iz) if self.nz > 1 else r"q_{\rm iso}^3"
                 self.set_derived_param(name, partial(self.get_qiso3, iz=iz), requires_emu_eval=True, latex=latex, exported=True)
 
         if require_sigma_12:
             for iz in range(self.nz):
-                name = f'sigma_12_{iz}'
-                latex = add_iz_to_latex(r"\sigma_{12}", iz)
+                name = f'sigma_12_{iz}' if self.nz > 1 else 'sigma_12'
+                latex = add_iz_to_latex(r"\sigma_{12}", iz) if self.nz > 1 else r"\sigma_{12}"
                 self.set_derived_param(name, partial(self.get_sigma_12, iz=iz), requires_emu_eval=True, latex=latex, exported=True)
 
         if reparam_counterterms: 
             for base in self.get_base_names(self.counterterm_params):
                 for iz in range(self.nz):
-                    name_reparam = f"{base}_r_{iz}"
-                    target_name = f"{base}_{iz}"
+                    name_reparam = f"{base}_r_{iz}" if self.nz > 1 else f"{base}_r"
+                    target_name = f"{base}_{iz}" if self.nz > 1 else base
                     latex_reparam = add_tilde_to_latex(self.parameters[target_name].latex)
                     self.add_sampled_param(name_reparam, value=0.0, prior=(0, 500), prior_type="gaussian", latex=latex_reparam)
                     self.set_derived_param(target_name, self._derived_from_name(name_reparam), latex=self.parameters[target_name].latex, exported=True)
@@ -491,8 +500,8 @@ class Params:
         if reparam_bias:
             for base in self.get_base_names(self.bias_params):
                 for iz in range(self.nz):
-                    name_reparam = f"{base}_r_{iz}"
-                    target_name = f"{base}_{iz}"
+                    name_reparam = f"{base}_r_{iz}" if self.nz > 1 else f"{base}_r"
+                    target_name = f"{base}_{iz}" if self.nz > 1 else base
                     latex_reparam = add_tilde_to_latex(self.parameters[target_name].latex)
                     if base == 'b1':
                         prior_type = 'uniform'
@@ -507,8 +516,8 @@ class Params:
         if reparam_stochastic:
             for base in self.get_base_names(self.stochastic_params):
                 for iz in range(self.nz):
-                    name_reparam = f"{base}_r_{iz}"
-                    target_name = f"{base}_{iz}"
+                    name_reparam = f"{base}_r_{iz}" if self.nz > 1 else f"{base}_r"
+                    target_name = f"{base}_{iz}" if self.nz > 1 else base
                     latex_reparam = add_tilde_to_latex(self.parameters[target_name].latex)
                     self.add_sampled_param(name_reparam, value=0.0, prior=(-1, 1), prior_type="uniform", latex=latex_reparam)
                     self.set_derived_param(target_name, self._derived_from_name(name_reparam), latex=self.parameters[target_name].latex, exported=True)

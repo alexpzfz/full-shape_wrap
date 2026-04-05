@@ -52,13 +52,15 @@ class Likelihood:
             def _am_base_param_name(name):
                 if '_r_' in name:
                     return name.split('_r_')[0]
-                return name.rsplit('_', 1)[0]
+                elif name.endswith('_r'):
+                    return name[:-2]
+                return name.rsplit('_', 1)[0] if '_' in name else name
 
             _bispec_only_params = {'NB0', 'MB0'}
 
             base_am_params = am_params if isinstance(am_params, list) else [am_params]
             for iz in range(self.nobservables):
-                am_iz = [f"{param}_{iz}" for param in base_am_params]
+                am_iz = [f"{param}_{iz}" if self.nobservables > 1 else param for param in base_am_params]
                 if self.observables[iz].__class__.__name__ == 'PowerSpectrumMultipoles':
                     am_iz = [p for p in am_iz if _am_base_param_name(p) not in _bispec_only_params]
                 self.am_params.append(am_iz)
@@ -67,8 +69,8 @@ class Likelihood:
                     self.params.parameters[param].fixed = True
                     self.params.parameters[param].derived_am = True
                     self.params.parameters[param].exported = True
-                    if '_r_' in param:
-                        base_param = param.replace('_r_', '_')
+                    if '_r_' in param or param.endswith('_r'):
+                        base_param = param.replace('_r_', '_') if '_r_' in param else param.replace('_r', '')
                         self.params.parameters[base_param].value = 0.0
                         self.params.parameters[base_param].fixed = True
                         self.params.parameters[base_param].derived = False
@@ -196,7 +198,9 @@ class Likelihood:
         def _base_param_name(name):
             if '_r_' in name:
                 return name.split('_r_')[0]
-            return name.rsplit('_', 1)[0]
+            elif name.endswith('_r'):
+                return name[:-2]
+            return name.rsplit('_', 1)[0] if '_' in name else name
 
         am_params_iz = [p for p in self.am_params[iz] if _base_param_name(p) not in _bispec_only_params]
         full_observable = self.observables[iz]
@@ -208,7 +212,7 @@ class Likelihood:
 
         for i, param in enumerate(am_params_iz):
             base_name = _base_param_name(param)
-            if '_r_' in param:
+            if '_r_' in param or param.endswith('_r'):
                 factor = self.params.get_reparam_factor(params, param)
             else:
                 factor = 1.0
@@ -240,7 +244,9 @@ class Likelihood:
         def _base_param_name(name):
             if '_r_' in name:
                 return name.split('_r_')[0]
-            return name.rsplit('_', 1)[0]
+            elif name.endswith('_r'):
+                return name[:-2]
+            return name.rsplit('_', 1)[0] if '_' in name else name
 
         am_params_iz = [param for param in self.am_params[iz] if _base_param_name(param) in _allowed_params]
         full_observable = self.observables[iz]
@@ -253,7 +259,7 @@ class Likelihood:
     
         for i, param in enumerate(am_params_iz):
             base_name = _base_param_name(param)
-            if '_r_' in param:
+            if '_r_' in param or param.endswith('_r'):
                 factor = self.params.get_reparam_factor(params, param)
             else:
                 factor = 1.0
@@ -274,7 +280,9 @@ class Likelihood:
         def _base_param_name(name):
             if '_r_' in name:
                 return name.split('_r_')[0]
-            return name.rsplit('_', 1)[0]
+            elif name.endswith('_r'):
+                return name[:-2]
+            return name.rsplit('_', 1)[0] if '_' in name else name
 
         am_params_iz = self.am_params[iz]
         am_pk = [param for param in am_params_iz if _base_param_name(param) not in _bispec_only_params]
