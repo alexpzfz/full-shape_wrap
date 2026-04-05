@@ -134,58 +134,57 @@ class COMET(comet, BaseModel):
         return preds
     
     def predict_bispectrum_scoccimarro_multipoles(self, observables, params, de_model):
-        ell_all = list(set([ll for obs in observables for ll in obs.ell]))
-        tri_concat = np.concatenate([obs.tri for obs in observables], axis=0)
-        tri_unique, idx_inverse = np.unique(tri_concat, axis=0, return_inverse=True)
-
-        bk_batched = self.Bell_scoccimarro(tri_unique, params, ell_all, de_model=de_model)
-        
+        ell_all = list(set([ll for obs in observables for ll in (obs.ell if obs.ellwin is not None else obs.ell)])) 
+        tri_arrays = [np.concatenate(obs.tri) if obs.triwin is None else np.concatenate(obs.triwin) for obs in observables]
+        tri_all = np.unique(np.concatenate(tri_arrays), axis=0)
+        bell_batched = self.Bell_scoccimarro(tri_all, params, ell_all, de_model=de_model)
         preds = []
         is_batched = isinstance(params.get('z'), (list, np.ndarray)) and len(params['z']) > 1
-        
-        idx_start = 0
         for obs in observables:
             iz = list(params['z']).index(obs.cosmo_fid['z']) if is_batched else None
-            ntri = len(obs.tri)
-            idx = idx_inverse[idx_start:idx_start+ntri]
-            idx_start += ntri
-            
+            tri = obs.tri if obs.triwin is None else obs.triwin
+            ell = obs.ell if obs.ellwin is None else obs.ellwin 
             bk_z = []
             for i, ell in enumerate(obs.ell):
-                bk_slice = bk_batched[f'ell{ell}'][idx]
+                # Use lexsort for robust row-wise comparison
+                idx = np.array([np.where((tri_all == t).all(axis=1))[0][0] for t in tri[i]])
+                bell_slice = bell_batched[f'ell{ell}'][idx]
                 if is_batched:
-                    bk_slice = bk_slice[:, iz]
-                bk_z.append(bk_slice)
-            preds.append(np.concatenate(bk_z))
+                    bell_slice = bell_slice[:, iz]
+                bk_z.append(bell_slice)
+            bell_z = np.concatenate(bk_z)
+
+            if obs.xwin is not None:
+                bell_z = obs.wmat @ bell_z
+            preds.append(bell_z)
             
         return preds
 
     def predict_bispectrum_sugiyama_multipoles(self, observables, params, de_model):
-        ell_all = list(set([ll for obs in observables for ll in obs.ell]))
-        pair_concat = np.concatenate([obs.pair for obs in observables], axis=0)
-        pair_unique, idx_inverse = np.unique(pair_concat, axis=0, return_inverse=True)
-
-        bk_batched = self.Bell_sugiyama(pair_unique, params, ell_all, de_model=de_model)
-        
+        ell_all = list(set([ll for obs in observables for ll in (obs.ell if obs.ellwin is not None else obs.ell)])) 
+        pair_arrays = [np.concatenate(obs.pair) if obs.xwin is None else np.concatenate(obs.pairwin) for obs in observables]
+        pair_all = np.unique(np.concatenate(pair_arrays), axis=0)
+        bell_batched = self.Bell_sugiyama(pair_all, params, ell_all, de_model=de_model)
         preds = []
         is_batched = isinstance(params.get('z'), (list, np.ndarray)) and len(params['z']) > 1
-        
-        idx_start = 0
         for obs in observables:
             iz = list(params['z']).index(obs.cosmo_fid['z']) if is_batched else None
-            npair = len(obs.pair)
-            idx = idx_inverse[idx_start:idx_start+npair]
-            idx_start += npair
-            
+            pair = obs.pair if obs.xwin is None else obs.pairwin
+            ell = obs.ell if obs.ellwin is None else obs.ellwin 
             bk_z = []
             for i, ell in enumerate(obs.ell):
-                # Note: Bell_sugiyama returns keys formatted as '{ell}', not 'ell{ell}'
-                bk_slice = bk_batched[f'{ell}'][idx]
+                # Use lexsort for robust row-wise comparison
+                idx = np.array([np.where((pair_all == p).all(axis=1))[0][0] for p in pair[i]])
+                bell_slice = bell_batched[f'{ell}'][idx]
                 if is_batched:
-                    bk_slice = bk_slice[:, iz]
-                bk_z.append(bk_slice)
-            preds.append(np.concatenate(bk_z))
-            
+                    bell_slice = bell_slice[:, iz]
+                bk_z.append(bell_slice)
+            bell_z = np.concatenate(bk_z)
+
+            if obs.xwin is not None:
+                bell_z = obs.wmat @ bell_z
+            preds.append(bell_z)
+
         return preds
 
     def predict_bispectrum_X_multipoles(self, observables, params, diagram, de_model):

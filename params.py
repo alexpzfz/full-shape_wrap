@@ -293,24 +293,27 @@ class Params:
     #     return comet_dict
     
     def get_comet_dict(self, full_dict):
-            """Extracts and batches parameters for the COMET emulator."""
-            comet_dict = {}
-            # Map shared cosmology
-            for name, p in self.cosmo_params.items():
-                if name in full_dict:
-                    comet_dict[p.base_name] = np.array([full_dict[name]]* self.nz) if self.nz > 1 else full_dict[name]
+        """Extracts and batches parameters for the COMET emulator."""
+        comet_dict = {}
+        # Map shared cosmology
+        for name, p in self.cosmo_params.items():
+            if name in full_dict:
+                comet_dict[p.base_name] = np.array([full_dict[name]]* self.nz) if self.nz > 1 else full_dict[name]
 
-            # Map batched nuisance parameters (arrays)
-            for param_group in [self.bias_params, self.counterterm_params, self.stochastic_params, self.extra_params]:
-                base_names = list(set(p.base_name for p in param_group.values()))
-                for base in base_names:
-                    vals = [full_dict[f"{base}_{i}"] for i in range(self.nz) if f"{base}_{i}" in full_dict]
-                    if vals:
-                        # Pass as array if multi-z, else scalar
-                        comet_dict[base] = np.array(vals) if self.nz > 1 else vals[0]
-                        
-            comet_dict['z'] = np.array(self.z_array) if self.nz > 1 else self.z_array[0]
-            return comet_dict
+        # Map batched nuisance parameters (arrays)
+        for param_group in [self.bias_params, self.counterterm_params, self.stochastic_params, self.extra_params]:
+            base_names = list(set(p.base_name for p in param_group.values()))
+            for base in base_names:
+                if self.nz > 1:
+                    val = [full_dict[f"{base}_{i}"] for i in range(self.nz) if f"{base}_{i}" in full_dict]
+                else:
+                    val = full_dict.get(base, None)
+                if val:
+                    # Pass as array if multi-z, else scalar
+                    comet_dict[base] = np.array(val) if self.nz > 1 else val
+                    
+        comet_dict['z'] = np.array(self.z_array) if self.nz > 1 else self.z_array[0]
+        return comet_dict
     
     def cosmo_dict(self, full_dict):
         cosmo_dict = {key: np.array([full_dict[key]]*self.nz) for key in self.cosmo_params if key in full_dict}
@@ -386,9 +389,11 @@ class Params:
         s12_out = self.emu.params['s12']
         return s12_out[iz] if isinstance(s12_out, (list, np.ndarray)) else s12_out
 
-    @staticmethod
-    def get_base_names(param_dict):
-            return list(set("_".join(k.split("_")[:-1]) for k in param_dict.keys())) 
+    def get_base_names(self, param_dict):
+            if len(self.z_array) > 1:
+                return list(set("_".join(k.split("_")[:-1]) for k in param_dict.keys())) 
+            else:
+                return list(param_dict.keys())
 
     def _reparam_bias_factor(self, p, name, iz=0):
         factor_ap = 1.0

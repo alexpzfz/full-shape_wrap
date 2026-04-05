@@ -221,7 +221,8 @@ class Likelihood:
                 diag_to_marg = self.emu.diagrams_to_marg[base_name]
                 bx = self.emu._get_bias_coeff_for_AM(diag_to_marg)   
                 bx = bx * factor# Apply reparametrization factor if needed
-                bx = bx[..., iz] # Get the bias coefficient for the correct redshift bin
+                if len(self.z_list) > 1:
+                    bx = bx[..., iz] # Get the bias coefficient for the correct redshift bin
             else:
                 diag_to_marg = self.emu._extra_diagrams_to_marg[base_name]
                 bx = factor # Apply reparametrization factor if needed
