@@ -159,13 +159,42 @@ class Likelihood:
     @staticmethod
     def marg_chi2(diff, dcov_chol, p0_vec, pcov_inv, detpcov, design_mat,
                   return_cond_mean_cov=False):
+        if not np.all(np.isfinite(diff)):
+            raise np.linalg.LinAlgError("diff contains NaN or Inf values in marg_chi2")
+        if not np.all(np.isfinite(dcov_chol)):
+            raise np.linalg.LinAlgError("dcov_chol contains NaN or Inf values in marg_chi2")
+        if not np.all(np.isfinite(design_mat)):
+            raise np.linalg.LinAlgError("design_mat contains NaN or Inf values in marg_chi2")
+        if not np.all(np.isfinite(pcov_inv)):
+            raise np.linalg.LinAlgError("pcov_inv contains NaN or Inf values in marg_chi2")
+        # if not np.isfinite(logdetpcov):
+        #     raise np.linalg.LinAlgError("logdetpcov is NaN or Inf in marg_chi2")
+
+        diag_dcov = np.diag(dcov_chol)
+        if np.any(diag_dcov <= 0.0):
+            raise np.linalg.LinAlgError(
+                f"dcov_chol has non-positive diagonal entries in marg_chi2 (min={diag_dcov.min():.3e})"
+            )
+
         res = diff - design_mat @ p0_vec
         #lamb = design_mat.T @ dcov_inv @ design_mat + pcov_inv
-        lamb = get_bCib(dcov_chol, design_mat) + pcov_inv
+        dt_cinv_d = get_bCib(dcov_chol, design_mat)
+        if not np.all(np.isfinite(dt_cinv_d)):
+            raise np.linalg.LinAlgError(
+                "D^T C^-1 D contains NaN or Inf in marg_chi2; "
+                f"max|D|={np.max(np.abs(design_mat)):.3e}, min diag(L_C)={np.min(diag_dcov):.3e}"
+            )
+        lamb = dt_cinv_d + pcov_inv
+        if not np.all(np.isfinite(lamb)):
+            raise np.linalg.LinAlgError(
+                "lambda contains NaN or Inf in marg_chi2 after adding prior precision; "
+                f"max|D^T C^-1 D|={np.max(np.abs(dt_cinv_d)):.3e}, max|P^-1|={np.max(np.abs(pcov_inv)):.3e}"
+            )
+        lamb = make_posdef(lamb, matrix_name='lambda')
         lamb_chol = np.linalg.cholesky(lamb) 
         # lamb_inv = np.linalg.inv(lamb) if lamb.shape[0] > 1 else 1/lamb
         # detlamb = np.linalg.det(lamb) if lamb.shape[0] > 1 else lamb
-        # compute detlmab from the Cholesky decomposition
+        # compute log(det(lamb)) from the Cholesky decomposition for numerical stability
         detlamb = np.prod(np.diag(lamb_chol))**2
         b = design_mat.T @ get_Cib(dcov_chol, res)
         chi2 =  get_bCib(dcov_chol, res)
@@ -173,9 +202,9 @@ class Likelihood:
         chi2 = chi2 + np.log(np.abs(detlamb)) + np.log(np.abs(detpcov))  # Include detpcov in log
         chi2 = float(np.asarray(chi2)) if lamb.shape[0] == 1 else chi2  # If lamb is 1D, return scalar chi2
         if return_cond_mean_cov:
-            # cond_mean = lamb_inv @ (b + pcov_inv @ p0_vec)
+            # Here res is already centered on p0_vec, so mean is p0_vec + lamb^{-1} b.
             # cond_cov = lamb_inv
-            cond_mean = get_Cib(lamb_chol, b + pcov_inv @ p0_vec)
+            cond_mean = p0_vec + get_Cib(lamb_chol, b)
             lamb_inv = get_inv_chol(lamb_chol)
             return chi2, cond_mean, lamb_inv
         return chi2
@@ -238,6 +267,9 @@ class Likelihood:
             elif nx > 1:
                 m_vec = np.sum(bx * px_ell, axis=1)
             design_mat[:, i] = m_vec
+        # if not np.all(np.isfinite(design_mat)):
+        #     bad = np.size(design_mat) - np.count_nonzero(np.isfinite(design_mat))
+        #     raise FloatingPointError(f"PK design matrix contains non-finite entries (bad={bad}, params={comet_params}).")
         return design_mat
     
     def get_design_matrix_bk(self, params, cache, iz):
@@ -364,6 +396,79 @@ def get_Cib(Lchol, b):
     # Solve L^T x = y for x
     x = np.linalg.solve(Lchol.T, y)
     return x
+
+
+def make_posdef(matrix, matrix_name='matrix', base_jitter=1e-12, max_tries=8):
+    """Return a symmetric positive-definite version of ``matrix``.
+
+    Strategy:
+    1) Symmetrize to remove tiny numerical asymmetries.
+    2) Try Cholesky directly.
+    3) If needed, add diagonal jitter with increasing amplitude.
+    4) If eigen-decomposition fails to converge, use an SVD-based symmetric projection.
+    5) Final safeguard: keep adding jitter until Cholesky succeeds or fail loudly.
+    """
+    matrix = np.asarray(matrix)
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError(f"{matrix_name} must be a square 2D array, got shape={matrix.shape}.")
+
+    matrix = 0.5 * (matrix + matrix.T)
+
+    if not np.all(np.isfinite(matrix)):
+        raise np.linalg.LinAlgError(
+            f"{matrix_name} contains NaN or Inf entries; cannot repair to positive definite."
+        )
+
+    try:
+        np.linalg.cholesky(matrix)
+        return matrix
+    except np.linalg.LinAlgError:
+        pass
+
+    diag_scale = max(float(np.max(np.abs(np.diag(matrix)))), 1.0)
+    jitter = base_jitter * diag_scale
+    eye = np.eye(matrix.shape[0], dtype=matrix.dtype)
+
+    for _ in range(max_tries):
+        candidate = matrix + jitter * eye
+        try:
+            np.linalg.cholesky(candidate)
+            print(f"Warning: {matrix_name} was not positive definite. Added jitter={jitter:.3e}.")
+            return candidate
+        except np.linalg.LinAlgError:
+            jitter *= 10.0
+
+    floor = base_jitter * diag_scale
+    try:
+        eigvals, eigvecs = np.linalg.eigh(matrix)
+        eigvals = np.clip(eigvals, floor, None)
+        repaired = (eigvecs * eigvals) @ eigvecs.T
+        repair_mode = "eigenvalue floor"
+    except np.linalg.LinAlgError:
+        # Fallback when eigensolver does not converge: project with SVD to a nearby symmetric matrix.
+        _, singvals, vt = np.linalg.svd(matrix, full_matrices=False)
+        hmat = (vt.T * singvals) @ vt
+        repaired = 0.5 * (matrix + hmat)
+        repair_mode = "SVD projection"
+
+    repaired = 0.5 * (repaired + repaired.T)
+
+    jitter = floor
+    for _ in range(max_tries + 4):
+        candidate = repaired + jitter * eye
+        try:
+            np.linalg.cholesky(candidate)
+            print(
+                f"Warning: {matrix_name} was not positive definite. "
+                f"Applied {repair_mode} with final jitter={jitter:.3e}."
+            )
+            return candidate
+        except np.linalg.LinAlgError:
+            jitter *= 10.0
+
+    raise np.linalg.LinAlgError(
+        f"Unable to make {matrix_name} positive definite after jitter/eigenvalue/SVD repair."
+    )
 
 def get_bCib(Lchol, b):
     # Solve L y = b for y

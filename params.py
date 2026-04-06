@@ -270,7 +270,7 @@ class Params:
                         self.emu.PL(0.1, cosmo_dict, de_model=self.de_model)  # Ensure PLin is evaluated for current cosmology
                         plin_evaluated = True
                     if isinstance(param.derived_func, str):
-                        full_dict[name] = float(self.emu.params[param.derived_func]) # This will only work when 1 dataset is used, need to fix this in the future
+                        full_dict[name] = self.emu.params[param.derived_func].item() # This will only work when 1 dataset is used, need to fix this in the future
                     elif callable(param.derived_func):
                         full_dict[name] = param.derived_func(full_dict)
 

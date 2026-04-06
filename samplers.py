@@ -145,18 +145,83 @@ class MinuitMinimizer(BaseSampler):
         if verbose:
             print(f"Initialized Minuit with {len(self.params.sampled_param_names)} free parameters.")
 
-    def run(self, hesse=True):
+    def run(self, hesse=False, strategy=2, tol=0.1, max_calls=(200000, 800000, 2000000),
+            simplex_on_retry=True, verbose=True):
         """
-        Run the minimization.
-        hesse: If True, runs HESSE after MIGRAD to estimate covariance/errors.
+        Run the minimization with robust retries.
+
+        Parameters
+        ----------
+        hesse : bool
+            If True, run HESSE after a successful MIGRAD call.
+        strategy : int
+            Minuit strategy level. Use 2 for a stringent convergence strategy.
+        tol : float
+            EDM tolerance. Smaller values enforce tighter convergence.
+        max_calls : tuple[int, ...]
+            Sequence of ncall values to try for MIGRAD. Each element is one retry.
+        simplex_on_retry : bool
+            If True, run SIMPLEX before MIGRAD on retries to improve robustness.
+        verbose : bool
+            If True, print retry/convergence status.
         """
-        # Run MIGRAD (Gradient descent)
-        self.m.migrad()
-        
-        # Optionally run HESSE (Hessian calculation for accurate errors)
-        if hesse:
+        self.m.strategy = strategy
+        self.m.tol = tol
+
+        def _fmin_flag(fmin, attr, default="n/a"):
+            return getattr(fmin, attr, default)
+
+        def _fmt_sci(value):
+            return f"{value:.3e}" if isinstance(value, (int, float, np.floating)) else value
+
+        def _print_fmin_diagnostics(prefix):
+            fmin = self.m.fmin
+            if not verbose:
+                return
+            print(
+                f"{prefix}: "
+                f"valid={self.m.valid}, "
+                f"edm={_fmt_sci(_fmin_flag(fmin, 'edm'))}, "
+                f"edm_goal={_fmt_sci(_fmin_flag(fmin, 'edm_goal'))}, "
+                f"above_max_edm={_fmin_flag(fmin, 'is_above_max_edm')}, "
+                f"call_limit={_fmin_flag(fmin, 'has_reached_call_limit')}, "
+                f"at_limit={_fmin_flag(fmin, 'has_parameters_at_limit')}, "
+                f"hesse_failed={_fmin_flag(fmin, 'hesse_failed')}, "
+                f"cov_posdef={_fmin_flag(fmin, 'has_posdef_covar')}, "
+                f"nfcn={_fmin_flag(fmin, 'nfcn')}, "
+                f"ngrad={_fmin_flag(fmin, 'ngrad')}"
+            )
+
+        for i, ncall in enumerate(max_calls):
+            if i > 0 and simplex_on_retry:
+                simplex_ncall = max(2000, ncall // 5)
+                if verbose:
+                    print(f"Retry {i}: running SIMPLEX with ncall={simplex_ncall} before MIGRAD")
+                self.m.simplex(ncall=simplex_ncall)
+                print(f"SIMPLEX attempt {i} completed, valid={self.m.valid}")
+
+            if verbose:
+                print(f"Running MIGRAD attempt {i+1}/{len(max_calls)} with ncall={ncall}, strategy={strategy}, tol={tol}")
+            self.m.migrad(ncall=ncall)
+            _print_fmin_diagnostics(prefix=f"MIGRAD attempt {i+1} status")
+
+            fmin = self.m.fmin
+            if self.m.valid and not fmin.has_reached_call_limit:
+                if verbose:
+                    print("MIGRAD converged.")
+                break
+
+            if verbose:
+                print(
+                    "MIGRAD did not fully converge "
+                    f"(valid={self.m.valid}, call_limit={fmin.has_reached_call_limit}, edm={fmin.edm:.3e})."
+                )
+
+        # Optionally run HESSE only after a valid minimum is found.
+        if hesse and self.m.valid:
             self.m.hesse()
-            
+            _print_fmin_diagnostics(prefix="Post-HESSE status")
+
         return self.m
     
     def get_map(self, return_am=True):
@@ -166,9 +231,10 @@ class MinuitMinimizer(BaseSampler):
         
         best_fit = {name: self.m.values[name] for name in self.sampled_param_names}
         uncertainties = {name: self.m.errors[name] for name in self.sampled_param_names}
-        if return_am and self.likelihood.am_params is not None:
+        if return_am and self.likelihood.do_am:
             full_dict = self.params.get_full_dict(best_fit)
             self.likelihood.am_sample_mode = 'map'
             self.likelihood.get_chi2(full_dict)  # Update AM params to best-fit values
-            best_fit.update({name: full_dict[name] for name in self.likelihood.am_params}) 
+            all_am_params = [name for am_params_iz in self.likelihood.am_params for name in am_params_iz]
+            best_fit.update({name: full_dict[name] for name in all_am_params})
         return best_fit, uncertainties
