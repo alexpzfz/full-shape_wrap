@@ -136,7 +136,7 @@ class COMET(comet, BaseModel):
         return preds
     
     def predict_bispectrum_scoccimarro_multipoles(self, observables, params, de_model):
-        ell_all = list(set([ll for obs in observables for ll in (obs.ell if obs.ellwin is not None else obs.ell)])) 
+        ell_all = list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)])) 
         tri_arrays = [np.concatenate(obs.tri) if obs.triwin is None else np.concatenate(obs.triwin) for obs in observables]
         tri_all = np.unique(np.concatenate(tri_arrays), axis=0)
         bell_batched = self.Bell_scoccimarro(tri_all, params, ell_all, de_model=de_model)
@@ -147,10 +147,10 @@ class COMET(comet, BaseModel):
             tri = obs.tri if obs.triwin is None else obs.triwin
             ell = obs.ell if obs.ellwin is None else obs.ellwin 
             bk_z = []
-            for i, ell in enumerate(obs.ell):
+            for i, ll in enumerate(ell):
                 # Use lexsort for robust row-wise comparison
                 idx = np.array([np.where((tri_all == t).all(axis=1))[0][0] for t in tri[i]])
-                bell_slice = bell_batched[f'ell{ell}'][idx]
+                bell_slice = bell_batched[f'ell{ll}'][idx]
                 if is_batched:
                     bell_slice = bell_slice[:, iz]
                 bk_z.append(bell_slice)
@@ -163,7 +163,7 @@ class COMET(comet, BaseModel):
         return preds
 
     def predict_bispectrum_sugiyama_multipoles(self, observables, params, de_model):
-        ell_all = list(set([ll for obs in observables for ll in (obs.ell if obs.ellwin is not None else obs.ell)])) 
+        ell_all = list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)])) 
         pair_arrays = [np.concatenate(obs.pair) if obs.xwin is None else np.concatenate(obs.pairwin) for obs in observables]
         pair_all = np.unique(np.concatenate(pair_arrays), axis=0)
         bell_batched = self.Bell_sugiyama(pair_all, params, ell_all, de_model=de_model)
@@ -174,10 +174,9 @@ class COMET(comet, BaseModel):
             pair = obs.pair if obs.xwin is None else obs.pairwin
             ell = obs.ell if obs.ellwin is None else obs.ellwin 
             bk_z = []
-            for i, ell in enumerate(obs.ell):
-                # Use lexsort for robust row-wise comparison
+            for i, ll in enumerate(ell):
                 idx = np.array([np.where((pair_all == p).all(axis=1))[0][0] for p in pair[i]])
-                bell_slice = bell_batched[f'{ell}'][idx]
+                bell_slice = bell_batched[f'{ll}'][idx]
                 if is_batched:
                     bell_slice = bell_slice[:, iz]
                 bk_z.append(bell_slice)
@@ -190,7 +189,7 @@ class COMET(comet, BaseModel):
         return preds
 
     def predict_bispectrum_X_multipoles(self, observables, params, diagram, de_model):
-        ell_all = list(set([ll for obs in observables for ll in (obs.ell if obs.ellwin is not None else obs.ell)])) 
+        ell_all = list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)])) 
         is_scoccimarro = hasattr(observables[0], 'tri')
         
         if is_scoccimarro:
@@ -213,8 +212,8 @@ class COMET(comet, BaseModel):
             coord = obs.tri if is_scoccimarro and obs.xwin is None else (obs.triwin if is_scoccimarro else (obs.pair if obs.xwin is None else obs.pairwin))
             ell = obs.ell if obs.ellwin is None else obs.ellwin 
             bX_z = []
-            for i, ell in enumerate(obs.ell):
-                ell_key = f'ell{ell}' if is_scoccimarro else f'{ell}'
+            for i, ll in enumerate(ell):
+                ell_key = f'ell{ll}' if is_scoccimarro else f'{ll}'
                 idx = np.array([np.where((coord_all == c).all(axis=1))[0][0] for c in coord[i]])
                 bX_slice = bX_batched[ell_key][idx]
                 if is_batched:
