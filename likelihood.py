@@ -309,7 +309,7 @@ class Likelihood:
         return design_mat
 
     def join_design_matrices(self, dm_pk, dm_bk, iz):
-        _bispec_only_params = ['NB0', 'MB0']
+        _bispec_only_params = {'NB0', 'MB0'}
         def _base_param_name(name):
             if '_r_' in name:
                 return name.split('_r_')[0]
@@ -318,43 +318,31 @@ class Likelihood:
             return name.rsplit('_', 1)[0] if '_' in name else name
 
         am_params_iz = self.am_params[iz]
-        am_pk = [param for param in am_params_iz if _base_param_name(param) not in _bispec_only_params]
-        NP0_pk_idx = None
-        for i, p in enumerate(am_pk):
-            if _base_param_name(p) == 'NP0':
-                NP0_pk_idx = i
-                break
-                
-        am_bk = [param for param in am_params_iz if param not in am_pk or _base_param_name(param) == 'NP0']
-        NP0_bk_idx = None
-        for i, p in enumerate(am_bk):
-            if _base_param_name(p) == 'NP0':
-                NP0_bk_idx = i
-                break
-         
+        
+        # Create output design matrix with shape (n_pk + n_bk, len(am_params_iz))
         ny_pk = dm_pk.shape[0]
         ny_bk = dm_bk.shape[0]
         ny = ny_pk + ny_bk
-        nam_pk = dm_pk.shape[1]
-        nam_bk = dm_bk.shape[1]
-        if NP0_pk_idx is None and NP0_bk_idx is None:
-            dm = np.zeros((ny, nam_pk + nam_bk))
-            dm[:ny_pk, :nam_pk] = dm_pk
-            dm[ny_pk:, nam_pk:] = dm_bk
-        else:
-            if NP0_pk_idx is None or NP0_bk_idx is None:
-                raise ValueError("Both NP0_pk_idx and NP0_bk_idx must be provided together.")
-            dm = np.zeros((ny, nam_pk + nam_bk - 1))
-            NP0_idx = NP0_pk_idx  # Use NP0_pk_idx as the index for the shared parameter in the combined design matrix
-            # Extract the dm_bk column corresponding to NP0
-            dm_bk_NP0 = dm_bk[:, NP0_bk_idx] # shape (ny_bk,)
-            dm_bk = np.delete(dm_bk, NP0_bk_idx, axis=1) # shape (ny_bk, nam_bk - 1)
-            # Fill pk part of the design matrix
-            dm[:ny_pk, :nam_pk] = dm_pk
-            # Fill bk part of the design matrix
-            dm[ny_pk:, nam_pk:] = dm_bk
-            # Fill the bk part to the NP0 column of the design matrix
-            dm[ny_pk:, NP0_idx] = dm_bk_NP0
+        nam_params = len(am_params_iz)
+        dm = np.zeros((ny, nam_params))
+        
+        # Build parameter lists that match dm_pk and dm_bk column ordering
+        am_pk = [param for param in am_params_iz if _base_param_name(param) not in _bispec_only_params]
+        am_bk = [param for param in am_params_iz if _base_param_name(param) in _bispec_only_params or _base_param_name(param) == 'NP0']
+        
+        # Create index mappings: parameter -> column index in dm_pk/dm_bk
+        pk_indices = {param: i for i, param in enumerate(am_pk)}
+        bk_indices = {param: i for i, param in enumerate(am_bk)}
+        
+        # Fill the design matrix
+        for idx, param in enumerate(am_params_iz):
+            if param in pk_indices:
+                # PK parameters: fill pk rows from dm_pk
+                dm[:ny_pk, idx] = dm_pk[:, pk_indices[param]]
+            if param in bk_indices:
+                # BK parameters (includes shared NP0): fill bk rows from dm_bk
+                dm[ny_pk:, idx] = dm_bk[:, bk_indices[param]]
+        
         return dm
 
 
