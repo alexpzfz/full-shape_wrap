@@ -112,7 +112,14 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=['000'], **kwargs):
     nmu12 = kwargs.pop('nmu12', 5) # cos(\theta_{12})
     nphi = kwargs.pop('nphi', 10) # \phi
     mu1, w_mu1 = np.polynomial.legendre.leggauss(nmu1)
-    mu12, w_mu12 = np.polynomial.legendre.leggauss(nmu12)
+    
+    # Change of variables for mu12 to resolve the k3 ~ 0 singularity when k1 ~ k2
+    # We substitute mu12 = 0.5 * (x + 1)**2 - 1.0, where x is Gauss-Legendre roots in [-1, 1].
+    # This places more integration points near mu12 = -1 and removes the square root 
+    x_mu12, w_x_mu12 = np.polynomial.legendre.leggauss(nmu12)
+    mu12 = 0.5 * (x_mu12 + 1)**2 - 1.0
+    w_mu12 = w_x_mu12 * (x_mu12 + 1)
+    
     phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)
     w_phi = 2 * np.pi / nphi
     mu1 = mu1[None, :, None, None] # shape (1, nmu1, 1, 1)
@@ -275,7 +282,12 @@ def bX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
 def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, **kwargs):
     nmu1, nmu12, nphi = kwargs.pop('nmu1', 5), kwargs.pop('nmu12', 5), kwargs.pop('nphi', 10)
     mu1, w_mu1 = np.polynomial.legendre.leggauss(nmu1)
-    mu12, w_mu12 = np.polynomial.legendre.leggauss(nmu12)
+    
+    # Resolves k3 ~ 0 singularity when k1 ~ k2 while perfectly preserving _PROJ_CACHE
+    x_mu12, w_x_mu12 = np.polynomial.legendre.leggauss(nmu12)
+    mu12 = 0.5 * (x_mu12 + 1)**2 - 1.0
+    w_mu12 = w_x_mu12 * (x_mu12 + 1)
+    
     phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)
     w_phi = 2 * np.pi / nphi
     mu1 = mu1[None, :, None, None] # shape (1, nmu1, 1, 1)
