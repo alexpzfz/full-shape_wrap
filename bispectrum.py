@@ -143,7 +143,8 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=['000'], **kwargs):
         # Reshape bfull to (n, nmu1 * nmu12 * nphi) for a blazing fast BLAS matrix-vector product
         bfull_flat = bfull.reshape(n, -1)
         for ll in ell:
-            res[f'{ll}'] = bfull_flat @ proj_ops[f'{ll}']
+            #res[f'{ll}'] = bfull_flat @ proj_ops[f'{ll}']
+            res[f'{ll}'] = np.dot(bfull_flat, proj_ops[f'{ll}'])
 
     return res
 

@@ -79,6 +79,7 @@ class COMET(comet, BaseModel):
         super().__init__(**kwargs)
         self._extra_diagrams = ['Pctr_a0', 'Pctr_a2', 'Pctr_a4']
         self._extra_diagrams_to_marg = {'a0': 'Pctr_a0', 'a2': 'Pctr_a2', 'a4': 'Pctr_a4'}
+        self.bispec_kwargs = {'soccimarro': {'nmu': 5, 'nphi': 5}, 'sugiyama': {'nmu1': 4, 'nmu12': 12, 'nphi': 5}}
 
     def predict_power_spectrum_multipoles(self, observables, params, de_model):
         ell_all = list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)]))
@@ -277,7 +278,7 @@ class COMET(comet, BaseModel):
             idx_ell = [np.sum([len(t) for t in tri[:i]]) for i in range(len(tri)+1)] # idx_ell[i] is the starting index of tri[i] in tri_all
 
         k1, k2, k3 = tri_all[:, 0], tri_all[:, 1], tri_all[:, 2]
-        bscocc = bispectrum_scoccimarro_proj(k1, k2, k3, self, params, ell=ell, de_model=de_model) #shape (ntri, n_ell)
+        bscocc = bispectrum_scoccimarro_proj(k1, k2, k3, self, params, ell=ell, de_model=de_model, **self.bispec_kwargs['soccimarro']) #shape (ntri, n_ell)
         res = {}
         for i, ll in enumerate(ell):
             res[f'ell{ll}'] = bscocc[f'ell{ll}'][idx_inverse[idx_ell[i]:idx_ell[i]+len(tri[i])]] if idx_inverse is not None else bscocc[f'ell{ll}']
@@ -294,7 +295,7 @@ class COMET(comet, BaseModel):
             pair_all, idx_inverse = np.unique(pair_all, axis=0, return_inverse=True) 
             idx_ell = [int(np.sum([len(p) for p in pair[:i]])) for i in range(len(pair)+1)]
         k1, k2 = pair_all[:, 0], pair_all[:, 1] 
-        bsugi = bispectrum_sugiyama_proj(k1, k2, self, params, ell=ell, de_model=de_model) #shape (npair, n_ell)
+        bsugi = bispectrum_sugiyama_proj(k1, k2, self, params, ell=ell, de_model=de_model, **self.bispec_kwargs['sugiyama']) #shape (npair, n_ell)
         res = {}
         for i, ll in enumerate(ell):
             res[f'{ll}'] = bsugi[f'{ll}'][idx_inverse][idx_ell[i]:idx_ell[i+1]] if idx_inverse is not None else bsugi[f'{ll}']
@@ -311,7 +312,7 @@ class COMET(comet, BaseModel):
             tri_all, idx_inverse = np.unique(tri_all, axis=0, return_inverse=True) 
             idx_ell = [np.sum([len(t) for t in tri[:i]]) for i in range(len(tri)+1)] # idx_ell[i] is the starting index of tri[i] in tri_all
         k1, k2, k3 = tri_all[:, 0], tri_all[:, 1], tri_all[:, 2]
-        bX_scocc = bX_ell_scoccimarro(k1, k2, k3, self, params, ell=ell, diagram=diagram, de_model=de_model) #shape (ntri, n_ell)
+        bX_scocc = bX_ell_scoccimarro(k1, k2, k3, self, params, ell=ell, diagram=diagram, de_model=de_model, **self.bispec_kwargs['soccimarro']) #shape (ntri, n_ell)
         res = {}
         for i, ll in enumerate(ell):
             res[f'ell{ll}'] = bX_scocc[f'ell{ll}'][idx_inverse][idx_ell[i]:idx_ell[i]+len(tri[i])] if idx_inverse is not None else bX_scocc[f'ell{ll}']
@@ -327,7 +328,7 @@ class COMET(comet, BaseModel):
             pair_all, idx_inverse = np.unique(pair_all, axis=0, return_inverse=True) 
             idx_ell = [int(np.sum([len(p) for p in pair[:i]])) for i in range(len(pair)+1)]
         k1, k2 = pair_all[:, 0], pair_all[:, 1] 
-        bX_sugi = bX_ell_sugiyama(k1, k2, self, params, ell=ell, diagram=diagram, de_model=de_model) #shape (npair, n_ell)
+        bX_sugi = bX_ell_sugiyama(k1, k2, self, params, ell=ell, diagram=diagram, de_model=de_model, **self.bispec_kwargs['sugiyama']) #shape (npair, n_ell)
         res = {}
         for i, ll in enumerate(ell):
             res[f'{ll}'] = bX_sugi[f'{ll}'][idx_inverse][idx_ell[i]:idx_ell[i+1]] if idx_inverse is not None else bX_sugi[f'{ll}']
