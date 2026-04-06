@@ -147,7 +147,7 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=['000'], **kwargs):
     mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi) # shape (n, nmu1, nmu12, nphi)
     
     bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs) # shape (n, nmu1, nmu2, nphi) or (n, ..., nz)
-    proj_ops = get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_phi, mu1, mu12, phi)
+    proj_ops = get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_phi, mu1, mu12, phi, mu12_transform)
     
     is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
     res = {}
@@ -168,9 +168,9 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=['000'], **kwargs):
 
 _PROJ_CACHE = {}
 
-def get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_phi, mu1, mu12, phi, cache=True):
+def get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_phi, mu1, mu12, phi, mu12_transform='quartic', cache=True):
     """Fetches or computes the projection operator for a given grid configuration."""
-    cache_key = (nmu1, nmu12, nphi, tuple(ell))
+    cache_key = (nmu1, nmu12, nphi, tuple(ell), mu12_transform)
     
     if cache_key in _PROJ_CACHE and cache:
         return _PROJ_CACHE[cache_key]
@@ -291,13 +291,21 @@ def bX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
 
 
 def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, **kwargs):
-    nmu1, nmu12, nphi = kwargs.pop('nmu1', 5), kwargs.pop('nmu12', 5), kwargs.pop('nphi', 10)
+    nmu1, nmu12, nphi = kwargs.pop('nmu1', 5), kwargs.pop('nmu12', 12), kwargs.pop('nphi', 5)
+    mu12_transform = kwargs.pop('mu12_transform', 'quartic')
     mu1, w_mu1 = np.polynomial.legendre.leggauss(nmu1)
     
     # Resolves k3 ~ 0 singularity when k1 ~ k2 while perfectly preserving _PROJ_CACHE
     x_mu12, w_x_mu12 = np.polynomial.legendre.leggauss(nmu12)
-    mu12 = 0.5 * (x_mu12 + 1)**2 - 1.0
-    w_mu12 = w_x_mu12 * (x_mu12 + 1)
+    if mu12_transform == 'linear':
+        mu12 = x_mu12
+        w_mu12 = w_x_mu12
+    elif mu12_transform == 'quadratic':
+        mu12 = 0.5 * (x_mu12 + 1)**2 - 1.0
+        w_mu12 = w_x_mu12 * (x_mu12 + 1)
+    elif mu12_transform == 'quartic':
+        mu12 = 0.125 * (x_mu12 + 1)**4 - 1.0
+        w_mu12 = w_x_mu12 * 0.5 * (x_mu12 + 1)**3
     
     phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)
     w_phi = 2 * np.pi / nphi
@@ -334,7 +342,8 @@ def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, **kwargs):
                                        w_phi=w_phi,
                                        mu1=mu1,
                                        mu12=mu12,
-                                       phi=phi)
+                                       phi=phi,
+                                       mu12_transform=mu12_transform)
                                        
     res = {}
     if is_batched:
