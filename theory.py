@@ -79,7 +79,8 @@ class COMET(comet, BaseModel):
         super().__init__(**kwargs)
         self._extra_diagrams = ['Pctr_a0', 'Pctr_a2', 'Pctr_a4']
         self._extra_diagrams_to_marg = {'a0': 'Pctr_a0', 'a2': 'Pctr_a2', 'a4': 'Pctr_a4'}
-        self.bispec_kwargs = {'soccimarro': {'nmu': 5, 'nphi': 5}, 'sugiyama': {'nmu1': 4, 'nmu12': 12, 'nphi': 5}}
+        self.bispec_kwargs = {'soccimarro': {'nmu': 5, 'nphi': 5}, 
+                              'sugiyama': {'nmu1': 5, 'nmu12': 12, 'nphi': 5, 'mu12_transform': 'quartic'}}
 
     def predict_power_spectrum_multipoles(self, observables, params, de_model):
         ell_all = list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)]))

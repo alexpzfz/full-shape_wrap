@@ -109,16 +109,27 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=['000'], **kwargs):
     # let's use Scoccimarro coordinate system!!
     n = k1.shape[0]
     nmu1 = kwargs.pop('nmu1', 5) # cos(\omega)
-    nmu12 = kwargs.pop('nmu12', 5) # cos(\theta_{12})
-    nphi = kwargs.pop('nphi', 10) # \phi
+    nmu12 = kwargs.pop('nmu12', 12) # cos(\theta_{12})
+    nphi = kwargs.pop('nphi', 5) # \phi
+    mu12_transform = kwargs.pop('mu12_transform', 'quartic') # change of variables for mu12 to resolve k3 ~ 0 singularity when k1 ~ k2
+
+
     mu1, w_mu1 = np.polynomial.legendre.leggauss(nmu1)
     
     # Change of variables for mu12 to resolve the k3 ~ 0 singularity when k1 ~ k2
     # We substitute mu12 = 0.5 * (x + 1)**2 - 1.0, where x is Gauss-Legendre roots in [-1, 1].
     # This places more integration points near mu12 = -1 and removes the square root 
     x_mu12, w_x_mu12 = np.polynomial.legendre.leggauss(nmu12)
-    mu12 = 0.5 * (x_mu12 + 1)**2 - 1.0
-    w_mu12 = w_x_mu12 * (x_mu12 + 1)
+
+    if mu12_transform == 'linear':
+        mu12 = x_mu12
+        w_mu12 = w_x_mu12
+    elif mu12_transform == 'quadratic':
+        mu12 = 0.5 * (x_mu12 + 1)**2 - 1.0
+        w_mu12 = w_x_mu12 * (x_mu12 + 1)
+    elif mu12_transform == 'quartic':
+        mu12 = 0.125 * (x_mu12 + 1)**4 - 1.0
+        w_mu12 = w_x_mu12 * 0.5 * (x_mu12 + 1)**3
     
     phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)
     w_phi = 2 * np.pi / nphi
