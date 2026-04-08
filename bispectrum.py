@@ -72,7 +72,7 @@ def stoch_term(ki, mui, b1, f, avir, sv, MB0, NP0):
     t = t * w_B_infty(lambda2, avir, sv)
     return t
 
-def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[0, 2], **kwargs):
+def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=['00', '20'], **kwargs):
     nmu = kwargs.pop('nmu', 20)
     nphi = kwargs.pop('nphi', 20)
     mu, w_mu = np.polynomial.legendre.leggauss(nmu)
@@ -93,15 +93,18 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[0, 2], **kwa
     is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
     
     for ll in ell:
-        lell = legendre(ll)(mu1) # shape (1, nmu, 1)
+        #lell = legendre(ll)(mu1) # shape (1, nmu, 1)
+        l, m = int(ll[0]), int(ll[1])
+        ylm = np.conjugate(sph_harm(l, -m, mu1, phi)) # shape (1, nmu, nphi)
         if is_batched:
-            lell = lell[..., None]
+            # lell = lell[..., None]
+            ylm = ylm[..., None]
             weights = w_mu[None, :, None, None] * w_phi
         else:
             weights = w_mu[None, :, None] * w_phi
             
-        integral = np.sum(bfull * lell * weights, axis=(1, 2)) # shape (ntri,) or (ntri, nz)
-        bell = (2*ll + 1) * integral / (4 * np.pi)
+        integral = np.sum(bfull * ylm * weights, axis=(1, 2)) # shape (ntri,) or (ntri, nz)
+        bell = (2*l + 1) * integral / (4 * np.pi)
         res[f'ell{ll}'] = bell
     return res
 
@@ -277,14 +280,17 @@ def bX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
         
     res = {}
     for ll in ell:
-        lell = legendre(ll)(mu1) # shape (1, nmu, 1)
+        # lell = legendre(ll)(mu1) # shape (1, nmu, 1)
+        l, m = int(ll[0]), int(ll[1])
+        ylm = sph_harm(l, m, mu1, phi) # shape (1, nmu, nphi)
         if is_batched:
-            lell = lell[..., None]
+            # lell = lell[..., None]
+            ylm = ylm[..., None]
             weights = w_mu[None, :, None, None] * w_phi
         else:
             weights = w_mu[None, :, None] * w_phi
             
-        integral = np.sum(bfull * lell * weights, axis=(1, 2)) # shape (ntri,) or (ntri, nz)
+        integral = np.sum(bfull * ylm * weights, axis=(1, 2)) # shape (ntri,) or (ntri, nz)
         bell = (2*ll + 1) * integral / (4 * np.pi)
         res[f'ell{ll}'] = bell
     return res
