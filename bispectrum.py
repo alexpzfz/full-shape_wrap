@@ -95,7 +95,7 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=['00', '20'],
     for ll in ell:
         #lell = legendre(ll)(mu1) # shape (1, nmu, 1)
         l, m = int(ll[0]), int(ll[1])
-        ylm = np.conjugate(sph_harm(l, -m, mu1, phi)) # shape (1, nmu, nphi)
+        ylm = np.conjugate(sph_harm(l, m, mu1, phi)) # shape (1, nmu, nphi)
         if is_batched:
             # lell = lell[..., None]
             ylm = ylm[..., None]
@@ -411,5 +411,5 @@ def apply_ap(k, mu, qpar, qperp):
 
 def sph_harm(l, m, costheta, phi):
     norm = np.sqrt(factorial(l - abs(m)) / factorial(l + abs(m)))
-    norm = norm * (-1)**(m - abs(m)/2)
+    norm = norm * (-1)**(0.5 * (m - abs(m)))
     return norm * lpmv(abs(m), l, costheta) * np.exp(1j * m * phi)
