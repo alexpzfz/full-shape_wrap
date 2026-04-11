@@ -72,7 +72,7 @@ def stoch_term(ki, mui, b1, f, avir, sv, MB0, NP0):
     t = t * w_B_infty(lambda2, avir, sv)
     return t
 
-def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=['00', '20'], **kwargs):
+def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[(0, 0), (2, 0)], **kwargs):
     nmu = kwargs.pop('nmu', 20)
     nphi = kwargs.pop('nphi', 20)
     mu, w_mu = np.polynomial.legendre.leggauss(nmu)
@@ -94,7 +94,7 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=['00', '20'],
     
     for ll in ell:
         #lell = legendre(ll)(mu1) # shape (1, nmu, 1)
-        l, m = int(ll[0]), int(ll[1])
+        l, m = ll
         ylm = np.conjugate(sph_harm(l, m, mu1, phi)) # shape (1, nmu, nphi)
         if is_batched:
             # lell = lell[..., None]
@@ -105,10 +105,10 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=['00', '20'],
             
         integral = np.sum(bfull * ylm * weights, axis=(1, 2)) # shape (ntri,) or (ntri, nz)
         bell = (2*l + 1) * integral / (4 * np.pi)
-        res[f'ell{ll}'] = bell
+        res[f'ell{ll}'] = bell.real
     return res
 
-def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=['000'], **kwargs):
+def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2)], **kwargs):
     # let's use Scoccimarro coordinate system!!
     n = k1.shape[0]
     nmu1 = kwargs.pop('nmu1', 5) # cos(\omega)
@@ -180,7 +180,7 @@ def get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_phi, mu1, 
         
     res_ops = {}
     for ll in ell:
-        l1, l2, L = map(int, ll)
+        l1, l2, L = ll
         proj_operator = np.zeros((1, nmu1, nmu12, nphi), dtype=complex) # Match broadcast shape
         h = float(wigner_3j(l1, l2, L, 0, 0, 0).evalf())
         if h == 0:
@@ -292,7 +292,7 @@ def bX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
             
         integral = np.sum(bfull * ylm * weights, axis=(1, 2)) # shape (ntri,) or (ntri, nz)
         bell = (2*ll + 1) * integral / (4 * np.pi)
-        res[f'ell{ll}'] = bell
+        res[f'ell{ll}'] = bell.real
     return res
 
 
