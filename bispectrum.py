@@ -21,20 +21,25 @@ def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs):
     k3_p, mu3_p = apply_ap(k3, mu3, qpar, qperp)
     # k1, k2, k3 are either arrays of any shape or floats
     k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
-    kunique = np.unique(k_all)
+    kunique, kinverse = np.unique(k_all, return_inverse=True)
     pdw = emu.Pdw(kunique, comet_params, mu=0.6, **kwargs)
+
+    n1, n2 = k1_p.size, k2_p.size
+    idx1 = kinverse[:n1].reshape(k1_p.shape)
+    idx2 = kinverse[n1:n1+n2].reshape(k2_p.shape)
+    idx3 = kinverse[n1+n2:].reshape(k3_p.shape)
     
     is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
     if is_batched:
         nz = len(comet_params['z'])
         batch_idx = np.arange(nz)
-        pdw1 = pdw[np.searchsorted(kunique, k1_p), batch_idx]
-        pdw2 = pdw[np.searchsorted(kunique, k2_p), batch_idx]
-        pdw3 = pdw[np.searchsorted(kunique, k3_p), batch_idx]
+        pdw1 = pdw[idx1, batch_idx]
+        pdw2 = pdw[idx2, batch_idx]
+        pdw3 = pdw[idx3, batch_idx]
     else:
-        pdw1 = pdw[np.searchsorted(kunique, k1_p)]
-        pdw2 = pdw[np.searchsorted(kunique, k2_p)]
-        pdw3 = pdw[np.searchsorted(kunique, k3_p)]
+        pdw1 = pdw[idx1]
+        pdw2 = pdw[idx2]
+        pdw3 = pdw[idx3]
     
     # tree level first
     btree = tree_term(k1_p, k2_p, mu1_p, mu2_p, k3_p, mu3_p, b1, b2, g2, f) * pdw1 * pdw2 + \
@@ -105,7 +110,8 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[(0, 0), (2, 
             
         integral = np.sum(bfull * ylm * weights, axis=(1, 2)) # shape (ntri,) or (ntri, nz)
         bell = (2*l + 1) * integral / (4 * np.pi)
-        res[f'ell{ll}'] = bell.real
+        ell_str = f'{l},{m}'
+        res[f'ell{ell_str}'] = bell.real
     return res
 
 def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2)], **kwargs):
