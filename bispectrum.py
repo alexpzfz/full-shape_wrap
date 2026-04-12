@@ -81,17 +81,21 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[(0, 0), (2, 
     nmu = kwargs.pop('nmu', 20)
     nphi = kwargs.pop('nphi', 20)
     mu, w_mu = np.polynomial.legendre.leggauss(nmu)
-    phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)
-    w_phi = 2 * np.pi / nphi
+    # phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)
+    # w_phi = 2 * np.pi / nphi
+    mphi, w_mphi = np.polynomial.chebyshev.chebgauss(nphi) # mphi = cos(phi)
+    w_mphi = 2 * w_mphi # transform weights to be in terms of phi
+
     mu1 = mu[None, :, None] # shape (1, nmu, 1)
-    phi = phi[None, None, :] # shape (1, 1, nphi)
+    mphi = mphi[None, None, :] # shape (1, 1, nphi)
+    w_mphi = w_mphi[None, None, :] # shape (1, 1, nphi)
 
     k1, k2, k3 = k1[:, None, None], k2[:, None, None], k3[:, None, None] # shape (ntri, 1, 1)
 
     mu12 = get_dot_cosine(k1, k2, k3)
     # ensure mu12 is in the range [-1, 1] to avoid numerical issues with sqrt
     mu12 = np.clip(mu12, -1, 1)
-    mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi)
+    mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * mphi
     # reshape everything to be (ntri, nmu, nphi)
     bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs) # shape (ntri, nmu, nphi) or (ntri, nmu, nphi, nz)
     res = {}
@@ -100,13 +104,13 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[(0, 0), (2, 
     for ll in ell:
         #lell = legendre(ll)(mu1) # shape (1, nmu, 1)
         l, m = ll
-        ylm = np.conjugate(sph_harm(l, m, mu1, phi)) # shape (1, nmu, nphi)
+        ylm = np.conjugate(sph_harm(l, m, mu1, np.arccos(mphi))) # shape (1, nmu, nphi)
         if is_batched:
             # lell = lell[..., None]
             ylm = ylm[..., None]
-            weights = w_mu[None, :, None, None] * w_phi
+            weights = w_mu[None, :, None, None] * w_mphi
         else:
-            weights = w_mu[None, :, None] * w_phi
+            weights = w_mu[None, :, None] * w_mphi
             
         integral = np.sum(bfull * ylm * weights, axis=(1, 2)) # shape (ntri,) or (ntri, nz)
         bell = (2*l + 1) * integral / (4 * np.pi)
@@ -120,7 +124,7 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2
     nmu1 = kwargs.pop('nmu1', 5) # cos(\omega)
     nmu12 = kwargs.pop('nmu12', 12) # cos(\theta_{12})
     nphi = kwargs.pop('nphi', 5) # \phi
-    mu12_transform = kwargs.pop('mu12_transform', 'quartic') # change of variables for mu12 to resolve k3 ~ 0 singularity when k1 ~ k2
+    mu12_transform = kwargs.pop('mu12_transform', 'quadratic') # change of variables for mu12 to resolve k3 ~ 0 singularity when k1 ~ k2
 
 
     mu1, w_mu1 = np.polynomial.legendre.leggauss(nmu1)
@@ -129,6 +133,9 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2
     # We substitute mu12 = 0.5 * (x + 1)**2 - 1.0, where x is Gauss-Legendre roots in [-1, 1].
     # This places more integration points near mu12 = -1 and removes the square root 
     x_mu12, w_x_mu12 = np.polynomial.legendre.leggauss(nmu12)
+    mphi, w_mphi = np.polynomial.chebyshev.chebgauss(nphi) # mphi = cos(phi)
+    w_mphi = 2 * w_mphi # transform weights to be in terms of phi
+
 
     if mu12_transform == 'linear':
         mu12 = x_mu12
@@ -139,24 +146,26 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2
     elif mu12_transform == 'quartic':
         mu12 = 0.125 * (x_mu12 + 1)**4 - 1.0
         w_mu12 = w_x_mu12 * 0.5 * (x_mu12 + 1)**3
+
     
-    phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)
-    w_phi = 2 * np.pi / nphi
+    # phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)
+    # w_phi = 2 * np.pi / nphi
     mu1 = mu1[None, :, None, None] # shape (1, nmu1, 1, 1)
     w_mu1 = w_mu1[None, :, None, None] # shape (1, nmu1, 1, 1)
     mu12 = mu12[None, None, :, None] # shape (1, 1, nmu12, 1)
     w_mu12 = w_mu12[None, None, :, None] # shape (1, 1, nmu12, 1)
-    phi = phi[None, None, None, :] # shape (1, 1, 1, nphi)
+    mphi = mphi[None, None, None, :] # shape (1, 1, 1, nphi)
+    w_mphi = w_mphi[None, None, None, :] # shape (1, 1, 1, nphi)
 
     k1, k2 = k1[:, None, None, None], k2[:, None, None, None] # shape (n, 1, 1, 1)
     
     # get k3 using the triangle condition
     k3 = np.sqrt(k1**2 + k2**2 + 2 * k1 * k2 * mu12) # shape (n, 1, nmu12, 1)
     # get mu2 using the Scoccimarro coordinate system
-    mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi) # shape (n, nmu1, nmu12, nphi)
+    mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * mphi # shape (n, nmu1, nmu12, nphi)
     
     bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs) # shape (n, nmu1, nmu2, nphi) or (n, ..., nz)
-    proj_ops = get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_phi, mu1, mu12, phi, mu12_transform)
+    proj_ops = get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_mphi, mu1, mu12, mphi, mu12_transform)
     
     is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
     res = {}
@@ -175,9 +184,53 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2
 
     return res
 
-_PROJ_CACHE = {}
 
-def get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_phi, mu1, mu12, phi, mu12_transform='quartic', cache=True):
+def bispectrum_sugiyama_proj_alt(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2)], **kwargs): 
+   # This is a version using a coordinate system where the line of sight is along the z-axis.
+    n = k1.shape[0]
+    nmu1 = kwargs.pop('nmu1', 5) # cos(\omega)
+    nmu2 = kwargs.pop('nmu2', 5) # cos(\omega)
+    nphi12 = kwargs.pop('nphi12', 5) # \phi
+
+    mu1, w_mu1 = np.polynomial.legendre.leggauss(nmu1)
+    mu2, w_mu2 = np.polynomial.legendre.leggauss(nmu2)
+    mphi12, w_mphi12 = np.polynomial.chebyshev.chebgauss(nphi12) # mphi12 = cos(phi12)
+    # mphi12 is cos(phi12), we need to tranfrom the weights to be in terms of phi12
+
+    w_mphi12 = 2 * w_mphi12
+    mu1 = mu1[None, :, None, None] # shape (1, nmu1, 1, 1)
+    w_mu1 = w_mu1[None, :, None, None] # shape (1, nmu1, 1, 1)
+    mu2 = mu2[None, None, :, None] # shape (1, 1, nmu2, 1)
+    w_mu2 = w_mu2[None, None, :, None] # shape (1, 1, nmu2, 1)
+    mphi12 = mphi12[None, None, None, :] # shape (1, 1, 1, nphi12)
+    w_mphi12 = w_mphi12[None, None, None, :] # shape (1, 1, 1, nphi12)
+
+    k1, k2 = k1[:, None, None, None], k2[:, None, None, None] # shape (n, 1, 1, 1)
+
+    mu12 = mu1 * mu2 + np.sqrt(1 - mu1**2) * np.sqrt(1 - mu2**2) * mphi12
+
+    k3 = np.sqrt(k1**2 + k2**2 + 2 * k1 * k2 * mu12) # shape (n, nmu1, nmu2, nphi12)
+    bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs) # shape (n, nmu1, nmu2, nphi12) or (n, ..., nz)
+    proj_op = get_cached_proj_operator_alt(nmu1, nmu2, nphi12, ell, w_mu1, w_mu2, w_mphi12, mu1, mu2, mphi12)
+
+    is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
+    res = {}
+    if is_batched:
+        nz = len(comet_params['z'])
+        bfull_flat = bfull.reshape(n, -1, nz)
+        for ll in ell:
+            res[f'{ll}'] = np.einsum('ijk,j->ik', bfull_flat, proj_op[f'{ll}'])
+    else:
+        bfull_flat = bfull.reshape(n, -1)
+        for ll in ell:
+            res[f'{ll}'] = bfull_flat @ proj_op[f'{ll}']
+
+    return res
+
+_PROJ_CACHE = {}
+_PROJ_CACHE_ALT = {}
+
+def get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_mphi, mu1, mu12, mphi, mu12_transform='quartic', cache=True):
     """Fetches or computes the projection operator for a given grid configuration."""
     cache_key = (nmu1, nmu12, nphi, tuple(ell), mu12_transform)
     
@@ -197,17 +250,51 @@ def get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_phi, mu1, 
             if w3j == 0:
                 continue
             y1 = sph_harm(l2, -M, mu12, 0)
-            y2 = sph_harm(L, M, mu1, -phi)
+            y2 = sph_harm(L, M, mu1, -np.arccos(mphi))
             proj_operator = proj_operator + w3j * y1 * y2
             
         # Apply integration weights here to save operations later
-        proj_operator = (proj_operator * w_mu1 * w_mu12 * w_phi).squeeze()
+        proj_operator = (proj_operator * w_mu1 * w_mu12 * w_mphi).squeeze()
         
         # Flatten the operator for faster dot products later
         prefactor = h *(2*l1 + 1) * (2*l2 + 1) * (2*L + 1) / (8 * np.pi)
         res_ops[f'{ll}'] = np.real(proj_operator.ravel() * prefactor)
         
     _PROJ_CACHE[cache_key] = res_ops
+    return res_ops
+
+
+def get_cached_proj_operator_alt(nmu1, nmu2, nphi12, ell, w_mu1, w_mu2, w_mphi12, mu1, mu2, mphi12, cache=True):
+    """Projection operator for the alternative coordinate system."""
+    cache_key = (nmu1, nmu2, nphi12, tuple(ell))
+    
+    if cache_key in _PROJ_CACHE_ALT and cache:
+        return _PROJ_CACHE_ALT[cache_key]
+        
+    res_ops = {}
+    for ll in ell:
+        l1, l2, L = ll
+        proj_operator = np.zeros((1, nmu1, nmu2, nphi12), dtype=complex) # Match broadcast shape
+        h = float(wigner_3j(l1, l2, L, 0, 0, 0).evalf())
+        if h == 0:
+            continue
+
+        for M in range(-L, L+1):
+            w3j = float(wigner_3j(l1, l2, L, M, -M, 0).evalf()) # Ensure it's a float
+            if w3j == 0:
+                continue
+            y1 = sph_harm(l1, M, mu1, 0)
+            y2 = sph_harm(l2, -M, mu2, -np.arccos(mphi12))
+            proj_operator = proj_operator + w3j * y1 * y2
+            
+        # Apply integration weights here to save operations later
+        proj_operator = (proj_operator * w_mu1 * w_mu2 * w_mphi12).squeeze()
+        
+        # Flatten the operator for faster dot products later
+        prefactor = h *(2*l1 + 1) * (2*l2 + 1) * (2*L + 1) / (8 * np.pi)
+        res_ops[f'{ll}'] = np.real(proj_operator.ravel() * prefactor)
+        
+    _PROJ_CACHE_ALT[cache_key] = res_ops
     return res_ops
 
 def bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, **kwargs):
