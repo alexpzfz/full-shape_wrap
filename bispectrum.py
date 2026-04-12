@@ -1,8 +1,9 @@
 import numpy as np
 from scipy.special import legendre, factorial, lpmv
+from scipy.interpolate import interp1d, RegularGridInterpolator
 from sympy.physics.wigner import wigner_3j
 
-def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs):
+def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, use_pdw_interp=False, **kwargs):
     params = emu.params
     nbar = emu.nbar
     b1, b2, g2, f = params['b1'], params['b2'], params['g2'], params['f']
@@ -21,26 +22,36 @@ def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs):
     k3_p, mu3_p = apply_ap(k3, mu3, qpar, qperp)
     # k1, k2, k3 are either arrays of any shape or floats
     k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
-    kunique, kinverse = np.unique(k_all, return_inverse=True)
-    pdw = emu.Pdw(kunique, comet_params, mu=0.6, **kwargs)
 
-    n1, n2 = k1_p.size, k2_p.size
-    idx1 = kinverse[:n1].reshape(k1_p.shape)
-    idx2 = kinverse[n1:n1+n2].reshape(k2_p.shape)
-    idx3 = kinverse[n1+n2:].reshape(k3_p.shape)
-    
-    is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
-    if is_batched:
-        nz = len(comet_params['z'])
-        batch_idx = np.arange(nz)
-        pdw1 = pdw[idx1, batch_idx]
-        pdw2 = pdw[idx2, batch_idx]
-        pdw3 = pdw[idx3, batch_idx]
+    if not use_pdw_interp:
+        kunique, kinverse = np.unique(k_all, return_inverse=True)
+        pdw = emu.Pdw(kunique, comet_params, mu=0.6, **kwargs)
+
+        n1, n2 = k1_p.size, k2_p.size
+        idx1 = kinverse[:n1].reshape(k1_p.shape)
+        idx2 = kinverse[n1:n1+n2].reshape(k2_p.shape)
+        idx3 = kinverse[n1+n2:].reshape(k3_p.shape)
+
+        is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
+        if is_batched:
+            nz = len(comet_params['z'])
+            batch_idx = np.arange(nz)
+            pdw1 = pdw[idx1, batch_idx]
+            pdw2 = pdw[idx2, batch_idx]
+            pdw3 = pdw[idx3, batch_idx]
+        else:
+            pdw1 = pdw[idx1]
+            pdw2 = pdw[idx2]
+            pdw3 = pdw[idx3]
     else:
-        pdw1 = pdw[idx1]
-        pdw2 = pdw[idx2]
-        pdw3 = pdw[idx3]
-    
+        kmin, kmax = np.min(k_all), np.max(k_all)
+        kgrid = np.logspace(np.log10(kmin*0.9), np.log10(kmax*1.1), 1000)
+        pdw_grid = emu.Pdw(kgrid, comet_params, mu=0.6, **kwargs)
+        pdw_interp = interp1d(kgrid, pdw_grid, kind='cubic')
+        pdw1 = pdw_interp(k1_p)
+        pdw2 = pdw_interp(k2_p)
+        pdw3 = pdw_interp(k3_p)
+
     # tree level first
     btree = tree_term(k1_p, k2_p, mu1_p, mu2_p, k3_p, mu3_p, b1, b2, g2, f) * pdw1 * pdw2 + \
             tree_term(k2_p, k3_p, mu2_p, mu3_p, k1_p, mu1_p, b1, b2, g2, f) * pdw2 * pdw3 + \
@@ -140,7 +151,8 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[(0, 0), (2, 
         res[f'ell{ell_str}'] = bell.real
     return res
 
-def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2)], **kwargs):
+def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2)], use_pdw_interp=False, 
+                             interpolate_k1k2=False, **kwargs):
     # let's use Scoccimarro coordinate system!!
     n = k1.shape[0]
     nmu1 = kwargs.pop('nmu1', 5) # cos(\omega)
@@ -178,14 +190,24 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2
     cphi = cphi[None, None, None, :] # shape (1, 1, 1, nphi)
     w_cphi = w_cphi[None, None, None, :] # shape (1, 1, 1, nphi)
 
-    k1, k2 = k1[:, None, None, None], k2[:, None, None, None] # shape (n, 1, 1, 1)
+    if not interpolate_k1k2:
+        k1, k2 = k1[:, None, None, None], k2[:, None, None, None] # shape (n, 1, 1, 1)
+    else:
+        k1_old, k2_old = k1.copy(), k2.copy()
+        k1 = np.linspace(k1.min()*0.99, k1.max()*1.1, 30, endpoint=True)
+        k2 = np.linspace(k2.min()*0.99, k2.max()*1.1, 30, endpoint=True)
+        k1, k2 = np.meshgrid(k1, k2, indexing='ij') # shape (35, 35)
+        k1 = k1.flatten()[:, None, None, None] # shape (n, 1, 1, 1)
+        k2 = k2.flatten()[:, None, None, None] # shape (n, 1, 1, 1)
+        n = k1.shape[0]
+    
     
     # get k3 using the triangle condition
     k3 = np.sqrt(k1**2 + k2**2 + 2 * k1 * k2 * mu12) # shape (n, 1, nmu12, 1)
     # get mu2 using the Scoccimarro coordinate system
     mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * cphi # shape (n, nmu1, nmu12, nphi)
     
-    bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs) # shape (n, nmu1, nmu2, nphi) or (n, ..., nz)
+    bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, use_pdw_interp=use_pdw_interp, **kwargs) # shape (n, nmu1, nmu2, nphi) or (n, ..., nz)
     proj_ops = get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_cphi, mu1, mu12, phi, mu12_transform=mu12_transform)
     
     is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
@@ -202,6 +224,13 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2
         for ll in ell:
             #res[f'{ll}'] = bfull_flat @ proj_ops[f'{ll}']
             res[f'{ll}'] = np.dot(bfull_flat, proj_ops[f'{ll}'])
+            if interpolate_k1k2:
+                k1_grid = np.linspace(k1_old.min()*0.99, k1_old.max()*1.1, 30, endpoint=True)
+                k2_grid = np.linspace(k2_old.min()*0.99, k2_old.max()*1.1, 30, endpoint=True)
+                k1k2 = np.outer(k1_grid, k2_grid)
+                interp_func = RegularGridInterpolator((k1_grid, k2_grid), res[f'{ll}'].reshape(30, 30), method='cubic')
+                pairs = np.stack([k1_old, k2_old], axis=-1)
+                res[f'{ll}'] = interp_func(pairs)
 
     return res
 
