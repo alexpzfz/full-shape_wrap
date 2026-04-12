@@ -91,6 +91,7 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[(0, 0), (2, 
     elif phi_quad == 'chebyshev':
         cphi, w_cphi = np.polynomial.chebyshev.chebgauss(nphi) # cphi = cos(phi)
         w_cphi = 2 * w_cphi # transform weights to be in terms of phi
+        phi = np.arccos(cphi) # transform cphi to phi
     elif phi_quad == 'legendre':
         phi, w_phi = np.polynomial.legendre.leggauss(nphi) # phi quadrature
         # transform -1, 1 to 0, 2pi
@@ -107,25 +108,34 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[(0, 0), (2, 
     mu12 = get_dot_cosine(k1, k2, k3)
     # ensure mu12 is in the range [-1, 1] to avoid numerical issues with sqrt
     mu12 = np.clip(mu12, -1, 1)
-    mu2 = mu12 * mu1 - np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * cphi
+    mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * cphi
     # reshape everything to be (ntri, nmu, nphi)
     bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs) # shape (ntri, nmu, nphi) or (ntri, nmu, nphi, nz)
     res = {}
     is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
+    n = k1.shape[0]
+
+    if is_batched:
+        nz = len(comet_params['z'])
+        bfull_flat = bfull.reshape(n, -1, nz)
+    else:
+        bfull_flat = bfull.reshape(n, -1)
     
     for ll in ell:
-        #lell = legendre(ll)(mu1) # shape (1, nmu, 1)
         l, m = ll
-        ylm = np.conjugate(sph_harm(l, m, mu1, np.arccos(cphi))) # shape (1, nmu, nphi)
-        if is_batched:
-            # lell = lell[..., None]
-            ylm = ylm[..., None]
-            weights = w_mu[None, :, None, None] * w_cphi
-        else:
-            weights = w_mu[None, :, None] * w_cphi
+        m_ = abs(m)
+        sign = (-1)**m if m < 0 else 1.
+        fact = 1 / np.sqrt(2) if m == 0 else 1.
+        ylm = sph_harm_real(l, m_, mu1, phi) # shape (1, nmu, nphi)
+        weights = w_mu[None, :, None] * w_cphi
+        proj_op = (ylm * weights).ravel()
             
-        integral = np.sum(bfull * ylm * weights, axis=(1, 2)) # shape (ntri,) or (ntri, nz)
-        bell = (2*l + 1) * integral / (4 * np.pi)
+        if is_batched:
+            integral = np.einsum('ijk,j->ik', bfull_flat, proj_op)
+        else:
+            integral = np.dot(bfull_flat, proj_op)
+
+        bell = sign * fact * (2*l + 1) * integral / (4 * np.pi)
         ell_str = f'{l},{m}'
         res[f'ell{ell_str}'] = bell.real
     return res
@@ -388,19 +398,26 @@ def bX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
         res = {f'ell{ll}': b0 if ll == 0 else np.zeros_like(b0) for ll in ell}
         return res
         
+    n = k1.shape[0]
+    if is_batched:
+        nz = len(comet_params['z'])
+        bfull_flat = bfull.reshape(n, -1, nz)
+    else:
+        bfull_flat = bfull.reshape(n, -1)
+
     res = {}
     for ll in ell:
         # lell = legendre(ll)(mu1) # shape (1, nmu, 1)
         l, m = int(ll[0]), int(ll[1])
         ylm = sph_harm(l, m, mu1, phi) # shape (1, nmu, nphi)
-        if is_batched:
-            # lell = lell[..., None]
-            ylm = ylm[..., None]
-            weights = w_mu[None, :, None, None] * w_phi
-        else:
-            weights = w_mu[None, :, None] * w_phi
+        weights = w_mu[None, :, None] * w_phi
+        proj_op = (ylm * weights).ravel()
             
-        integral = np.sum(bfull * ylm * weights, axis=(1, 2)) # shape (ntri,) or (ntri, nz)
+        if is_batched:
+            integral = np.einsum('ijk,j->ik', bfull_flat, proj_op)
+        else:
+            integral = np.dot(bfull_flat, proj_op)
+            
         bell = (2*ll + 1) * integral / (4 * np.pi)
         res[f'ell{ll}'] = bell.real
     return res
@@ -519,7 +536,21 @@ def apply_ap(k, mu, qpar, qperp):
     mu_p = mu / F / np.sqrt(1 + mu**2 * (1/F**2 - 1))
     return k_p, mu_p
 
-def sph_harm(l, m, costheta, phi):
+def sph_harm(l, m, costheta, phi, normalized=False):
     norm = np.sqrt(factorial(l - abs(m)) / factorial(l + abs(m)))
     norm = norm * (-1)**(0.5 * (m - abs(m)))
+    if normalized:
+        norm = norm * np.sqrt((2*l + 1)/(4*np.pi))
     return norm * lpmv(abs(m), l, costheta) * np.exp(1j * m * phi) 
+
+def sph_harm_real(l, m, costheta, phi, normalized=False):
+    norm = np.sqrt(factorial(l - abs(m)) / factorial(l + abs(m)))
+    norm = norm * (-1)**(0.5 * (m - abs(m)))
+    if normalized:
+        norm = norm * np.sqrt((2*l + 1)/(4*np.pi))
+    if m > 0:
+        return np.sqrt(2) * norm * lpmv(m, l, costheta) * np.cos(m * phi)
+    elif m < 0:
+        return np.sqrt(2) * norm * lpmv(-m, l, costheta) * np.sin(-m * phi)
+    else:
+        return norm * lpmv(0, l, costheta)
