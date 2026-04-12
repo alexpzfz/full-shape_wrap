@@ -78,24 +78,31 @@ def stoch_term(ki, mui, b1, f, avir, sv, MB0, NP0):
     return t
 
 def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[(0, 0), (2, 0)], **kwargs):
-    nmu = kwargs.pop('nmu', 20)
-    nphi = kwargs.pop('nphi', 20)
+    nmu = kwargs.pop('nmu', 5)
+    nphi = kwargs.pop('nphi', 5)
+    phi_quad = kwargs.pop('phi_quad', 'chebyshev')
     mu, w_mu = np.polynomial.legendre.leggauss(nmu)
-    # phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)
-    # w_phi = 2 * np.pi / nphi
-    mphi, w_mphi = np.polynomial.chebyshev.chebgauss(nphi) # mphi = cos(phi)
-    w_mphi = 2 * w_mphi # transform weights to be in terms of phi
+
+    if phi_quad == 'chebyshev':
+        cphi, w_cphi = np.polynomial.chebyshev.chebgauss(nphi) # cphi = cos(phi)
+        w_cphi = 2 * w_cphi # transform weights to be in terms of phi
+    elif phi_quad == 'legendre':
+        phi, w_phi = np.polynomial.legendre.leggauss(nphi) # phi quadrature
+        # transform -1, 1 to 0, 2pi
+        phi = 0.5 * (phi + 1) * 2 * np.pi
+        cphi = np.cos(phi)
+        w_cphi = w_phi * np.pi # transform weights to be in terms of phi
 
     mu1 = mu[None, :, None] # shape (1, nmu, 1)
-    mphi = mphi[None, None, :] # shape (1, 1, nphi)
-    w_mphi = w_mphi[None, None, :] # shape (1, 1, nphi)
+    cphi = cphi[None, None, :] # shape (1, 1, nphi)
+    w_cphi = w_cphi[None, None, :] # shape (1, 1, nphi)
 
     k1, k2, k3 = k1[:, None, None], k2[:, None, None], k3[:, None, None] # shape (ntri, 1, 1)
 
     mu12 = get_dot_cosine(k1, k2, k3)
     # ensure mu12 is in the range [-1, 1] to avoid numerical issues with sqrt
     mu12 = np.clip(mu12, -1, 1)
-    mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * mphi
+    mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * cphi
     # reshape everything to be (ntri, nmu, nphi)
     bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs) # shape (ntri, nmu, nphi) or (ntri, nmu, nphi, nz)
     res = {}
@@ -104,13 +111,13 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[(0, 0), (2, 
     for ll in ell:
         #lell = legendre(ll)(mu1) # shape (1, nmu, 1)
         l, m = ll
-        ylm = np.conjugate(sph_harm(l, m, mu1, np.arccos(mphi))) # shape (1, nmu, nphi)
+        ylm = np.conjugate(sph_harm(l, m, mu1, np.arccos(cphi))) # shape (1, nmu, nphi)
         if is_batched:
             # lell = lell[..., None]
             ylm = ylm[..., None]
-            weights = w_mu[None, :, None, None] * w_mphi
+            weights = w_mu[None, :, None, None] * w_cphi
         else:
-            weights = w_mu[None, :, None] * w_mphi
+            weights = w_mu[None, :, None] * w_cphi
             
         integral = np.sum(bfull * ylm * weights, axis=(1, 2)) # shape (ntri,) or (ntri, nz)
         bell = (2*l + 1) * integral / (4 * np.pi)
@@ -133,8 +140,8 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2
     # We substitute mu12 = 0.5 * (x + 1)**2 - 1.0, where x is Gauss-Legendre roots in [-1, 1].
     # This places more integration points near mu12 = -1 and removes the square root 
     x_mu12, w_x_mu12 = np.polynomial.legendre.leggauss(nmu12)
-    mphi, w_mphi = np.polynomial.chebyshev.chebgauss(nphi) # mphi = cos(phi)
-    w_mphi = 2 * w_mphi # transform weights to be in terms of phi
+    cphi, w_cphi = np.polynomial.chebyshev.chebgauss(nphi) # cphi = cos(phi)
+    w_cphi = 2 * w_cphi
 
 
     if mu12_transform == 'linear':
@@ -154,18 +161,18 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2
     w_mu1 = w_mu1[None, :, None, None] # shape (1, nmu1, 1, 1)
     mu12 = mu12[None, None, :, None] # shape (1, 1, nmu12, 1)
     w_mu12 = w_mu12[None, None, :, None] # shape (1, 1, nmu12, 1)
-    mphi = mphi[None, None, None, :] # shape (1, 1, 1, nphi)
-    w_mphi = w_mphi[None, None, None, :] # shape (1, 1, 1, nphi)
+    cphi = cphi[None, None, None, :] # shape (1, 1, 1, nphi)
+    w_cphi = w_cphi[None, None, None, :] # shape (1, 1, 1, nphi)
 
     k1, k2 = k1[:, None, None, None], k2[:, None, None, None] # shape (n, 1, 1, 1)
     
     # get k3 using the triangle condition
     k3 = np.sqrt(k1**2 + k2**2 + 2 * k1 * k2 * mu12) # shape (n, 1, nmu12, 1)
     # get mu2 using the Scoccimarro coordinate system
-    mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * mphi # shape (n, nmu1, nmu12, nphi)
+    mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * cphi # shape (n, nmu1, nmu12, nphi)
     
     bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs) # shape (n, nmu1, nmu2, nphi) or (n, ..., nz)
-    proj_ops = get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_mphi, mu1, mu12, mphi, mu12_transform)
+    proj_ops = get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_cphi, mu1, mu12, cphi, mu12_transform=mu12_transform)
     
     is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
     res = {}
@@ -194,24 +201,24 @@ def bispectrum_sugiyama_proj_alt(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 
 
     mu1, w_mu1 = np.polynomial.legendre.leggauss(nmu1)
     mu2, w_mu2 = np.polynomial.legendre.leggauss(nmu2)
-    mphi12, w_mphi12 = np.polynomial.chebyshev.chebgauss(nphi12) # mphi12 = cos(phi12)
-    # mphi12 is cos(phi12), we need to tranfrom the weights to be in terms of phi12
+    cphi12, w_cphi12 = np.polynomial.chebyshev.chebgauss(nphi12) # cphi12 = cos(phi12)
+    # cphi12 is cos(phi12), we need to tranfrom the weights to be in terms of phi12
 
-    w_mphi12 = 2 * w_mphi12
+    w_cphi12 = 2 * w_cphi12
     mu1 = mu1[None, :, None, None] # shape (1, nmu1, 1, 1)
     w_mu1 = w_mu1[None, :, None, None] # shape (1, nmu1, 1, 1)
     mu2 = mu2[None, None, :, None] # shape (1, 1, nmu2, 1)
     w_mu2 = w_mu2[None, None, :, None] # shape (1, 1, nmu2, 1)
-    mphi12 = mphi12[None, None, None, :] # shape (1, 1, 1, nphi12)
-    w_mphi12 = w_mphi12[None, None, None, :] # shape (1, 1, 1, nphi12)
+    cphi12 = cphi12[None, None, None, :] # shape (1, 1, 1, nphi12)
+    w_cphi12 = w_cphi12[None, None, None, :] # shape (1, 1, 1, nphi12)
 
     k1, k2 = k1[:, None, None, None], k2[:, None, None, None] # shape (n, 1, 1, 1)
 
-    mu12 = mu1 * mu2 + np.sqrt(1 - mu1**2) * np.sqrt(1 - mu2**2) * mphi12
+    mu12 = mu1 * mu2 + np.sqrt(1 - mu1**2) * np.sqrt(1 - mu2**2) * cphi12
 
     k3 = np.sqrt(k1**2 + k2**2 + 2 * k1 * k2 * mu12) # shape (n, nmu1, nmu2, nphi12)
     bfull = bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, **kwargs) # shape (n, nmu1, nmu2, nphi12) or (n, ..., nz)
-    proj_op = get_cached_proj_operator_alt(nmu1, nmu2, nphi12, ell, w_mu1, w_mu2, w_mphi12, mu1, mu2, mphi12)
+    proj_op = get_cached_proj_operator_alt(nmu1, nmu2, nphi12, ell, w_mu1, w_mu2, w_cphi12, mu1, mu2, cphi12)
 
     is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
     res = {}
@@ -230,7 +237,7 @@ def bispectrum_sugiyama_proj_alt(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 
 _PROJ_CACHE = {}
 _PROJ_CACHE_ALT = {}
 
-def get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_mphi, mu1, mu12, mphi, mu12_transform='quartic', cache=True):
+def get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_cphi, mu1, mu12, cphi, mu12_transform='quartic', cache=True):
     """Fetches or computes the projection operator for a given grid configuration."""
     cache_key = (nmu1, nmu12, nphi, tuple(ell), mu12_transform)
     
@@ -250,11 +257,11 @@ def get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_mphi, mu1,
             if w3j == 0:
                 continue
             y1 = sph_harm(l2, -M, mu12, 0)
-            y2 = sph_harm(L, M, mu1, -np.arccos(mphi))
+            y2 = np.conj(sph_harm(L, M, mu1, np.arccos(cphi)))
             proj_operator = proj_operator + w3j * y1 * y2
             
         # Apply integration weights here to save operations later
-        proj_operator = (proj_operator * w_mu1 * w_mu12 * w_mphi).squeeze()
+        proj_operator = (proj_operator * w_mu1 * w_mu12 * w_cphi).squeeze()
         
         # Flatten the operator for faster dot products later
         prefactor = h *(2*l1 + 1) * (2*l2 + 1) * (2*L + 1) / (8 * np.pi)
@@ -264,7 +271,7 @@ def get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_mphi, mu1,
     return res_ops
 
 
-def get_cached_proj_operator_alt(nmu1, nmu2, nphi12, ell, w_mu1, w_mu2, w_mphi12, mu1, mu2, mphi12, cache=True):
+def get_cached_proj_operator_alt(nmu1, nmu2, nphi12, ell, w_mu1, w_mu2, w_cphi12, mu1, mu2, cphi12, cache=True):
     """Projection operator for the alternative coordinate system."""
     cache_key = (nmu1, nmu2, nphi12, tuple(ell))
     
@@ -284,11 +291,11 @@ def get_cached_proj_operator_alt(nmu1, nmu2, nphi12, ell, w_mu1, w_mu2, w_mphi12
             if w3j == 0:
                 continue
             y1 = sph_harm(l1, M, mu1, 0)
-            y2 = sph_harm(l2, -M, mu2, -np.arccos(mphi12))
+            y2 = np.conj(sph_harm(l2, -M, mu2, np.arccos(cphi12)))
             proj_operator = proj_operator + w3j * y1 * y2
             
         # Apply integration weights here to save operations later
-        proj_operator = (proj_operator * w_mu1 * w_mu2 * w_mphi12).squeeze()
+        proj_operator = (proj_operator * w_mu1 * w_mu2 * w_cphi12).squeeze()
         
         # Flatten the operator for faster dot products later
         prefactor = h *(2*l1 + 1) * (2*l2 + 1) * (2*L + 1) / (8 * np.pi)
@@ -505,4 +512,35 @@ def apply_ap(k, mu, qpar, qperp):
 def sph_harm(l, m, costheta, phi):
     norm = np.sqrt(factorial(l - abs(m)) / factorial(l + abs(m)))
     norm = norm * (-1)**(0.5 * (m - abs(m)))
-    return norm * lpmv(abs(m), l, costheta) * np.exp(1j * m * phi)
+    return norm * lpmv(abs(m), l, costheta) * np.exp(1j * m * phi) 
+
+# def cos_mphi(m, cosphi):
+#     m_ = abs(m)
+#     # cos(m phi) in terms of cos(phi) using Chebyshev recursive relation
+#     if m_ == 0:
+#         return np.ones_like(cosphi)
+#     elif m_ == 1:
+#         return cosphi
+#     else:
+#         cos_mm2 = np.ones_like(cosphi)
+#         cos_mm1 = cosphi
+#         for i in range(2, m_+1):
+#             cos_m = 2 * cosphi * cos_mm1 - cos_mm2
+#             cos_mm2, cos_mm1 = cos_mm1, cos_m
+#         return cos_m
+
+# def sin_mphi(m, cosphi):
+#     m_ = abs(m)
+#     sign = 1 if m >= 0 else -1
+#     # sin(m phi) in terms of cos(phi) using Chebyshev recursive relation
+#     if m_ == 0:
+#         return np.zeros_like(cosphi)
+#     elif m_ == 1:
+#         return sign * np.sqrt(1 - cosphi**2)
+#     else:
+#         sin_mm2 = np.zeros_like(cosphi)
+#         sin_mm1 = np.sqrt(1 - cosphi**2)
+#         for i in range(2, m_+1):
+#             sin_m = 2 * cosphi * sin_mm1 - sin_mm2
+#             sin_mm2, sin_mm1 = sin_mm1, sin_m
+#         return sign * sin_m
