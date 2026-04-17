@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.special import legendre, factorial, lpmv
-from scipy.interpolate import interp1d, RegularGridInterpolator
+from scipy.interpolate import interp1d, RegularGridInterpolator, RectBivariateSpline
 from sympy.physics.wigner import wigner_3j
 
 def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, use_pdw_interp=False, **kwargs):
@@ -158,6 +158,10 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2
     nmu1 = kwargs.pop('nmu1', 5) # cos(\omega)
     nmu12 = kwargs.pop('nmu12', 12) # cos(\theta_{12})
     nphi = kwargs.pop('nphi', 5) # \phi
+    k1k2_interp_method = kwargs.pop('k1k2_interp_method', 'cubic')
+    k1k2_interp_grid_size = kwargs.pop('k1k2_interp_grid_size', None)
+    k1k2_interp_adaptive = kwargs.pop('k1k2_interp_adaptive', True)
+    k1k2_interp_scale = kwargs.pop('k1k2_interp_scale', 'log')
     mu12_transform = kwargs.pop('mu12_transform', 'quadratic') # change of variables for mu12 to resolve k3 ~ 0 singularity when k1 ~ k2
     mu1, w_mu1 = np.polynomial.legendre.leggauss(nmu1)
     
@@ -194,8 +198,38 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2
         k1, k2 = k1[:, None, None, None], k2[:, None, None, None] # shape (n, 1, 1, 1)
     else:
         k1_old, k2_old = k1.copy(), k2.copy()
-        k1 = np.linspace(k1.min()*0.99, k1.max()*1.1, 30, endpoint=True)
-        k2 = np.linspace(k2.min()*0.99, k2.max()*1.1, 30, endpoint=True)
+        n_input = k1_old.shape[0]
+        if k1k2_interp_grid_size is not None:
+            interp_grid_size = max(4, int(k1k2_interp_grid_size))
+        elif k1k2_interp_adaptive:
+            # For large n this keeps interpolation accurate while avoiding oversized grids.
+            interp_grid_size = int(np.clip(np.sqrt(n_input), 20, 40))
+        else:
+            interp_grid_size = 30
+
+        if k1k2_interp_scale == 'log':
+            k1_grid = np.logspace(np.log10(k1_old.min()*0.99), np.log10(k1_old.max()*1.1), interp_grid_size, endpoint=True)
+            k2_grid = np.logspace(np.log10(k2_old.min()*0.99), np.log10(k2_old.max()*1.1), interp_grid_size, endpoint=True)
+        elif k1k2_interp_scale == 'linear':
+            k1_grid = np.linspace(k1_old.min()*0.99, k1_old.max()*1.1, interp_grid_size, endpoint=True)
+            k2_grid = np.linspace(k2_old.min()*0.99, k2_old.max()*1.1, interp_grid_size, endpoint=True)
+        elif k1k2_interp_scale == 'hybrid':
+            # Logarithmic spacing at low k and linear spacing at high k
+            kthresh = 0.02
+            log_size = interp_grid_size // 4
+            lin_size = interp_grid_size - log_size
+            k1_grid_log = np.logspace(np.log10(k1_old.min()*0.99), np.log10(kthresh*0.99), log_size, endpoint=True)
+            k1_grid_lin = np.linspace(kthresh*1.05, k1_old.max()*1.1, lin_size, endpoint=True)
+            k1_grid = np.concatenate([k1_grid_log, k1_grid_lin])
+
+            k2_grid_log = np.logspace(np.log10(k2_old.min()*0.99), np.log10(kthresh*0.99), log_size, endpoint=True)
+            k2_grid_lin = np.linspace(kthresh*1.05, k2_old.max()*1.1, lin_size, endpoint=True)
+            k2_grid = np.concatenate([k2_grid_log, k2_grid_lin])
+
+        interp_points = np.column_stack((k1_old, k2_old))
+
+        k1 = k1_grid
+        k2 = k2_grid
         k1, k2 = np.meshgrid(k1, k2, indexing='ij') # shape (35, 35)
         k1 = k1.flatten()[:, None, None, None] # shape (n, 1, 1, 1)
         k2 = k2.flatten()[:, None, None, None] # shape (n, 1, 1, 1)
@@ -225,12 +259,19 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2
             #res[f'{ll}'] = bfull_flat @ proj_ops[f'{ll}']
             res[f'{ll}'] = np.dot(bfull_flat, proj_ops[f'{ll}'])
             if interpolate_k1k2:
-                k1_grid = np.linspace(k1_old.min()*0.99, k1_old.max()*1.1, 30, endpoint=True)
-                k2_grid = np.linspace(k2_old.min()*0.99, k2_old.max()*1.1, 30, endpoint=True)
-                k1k2 = np.outer(k1_grid, k2_grid)
-                interp_func = RegularGridInterpolator((k1_grid, k2_grid), res[f'{ll}'].reshape(30, 30), method='cubic')
-                pairs = np.stack([k1_old, k2_old], axis=-1)
-                res[f'{ll}'] = interp_func(pairs)
+                grid_values = res[f'{ll}'].reshape(interp_grid_size, interp_grid_size)
+                if k1k2_interp_method == 'linear':
+                    interp_func = RegularGridInterpolator(
+                        (k1_grid, k2_grid),
+                        grid_values,
+                        method='linear',
+                    )
+                    res[f'{ll}'] = interp_func(interp_points)
+                elif k1k2_interp_method == 'cubic':
+                    interp_func = RectBivariateSpline(k1_grid, k2_grid, grid_values, kx=3, ky=3, s=0)
+                    res[f'{ll}'] = interp_func.ev(interp_points[:, 0], interp_points[:, 1])
+                else:
+                    raise ValueError(f"Unsupported k1k2_interp_method: {k1k2_interp_method}")
 
     return res
 
