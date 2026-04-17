@@ -147,8 +147,7 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[(0, 0), (2, 
             integral = np.dot(bfull_flat, proj_op)
 
         bell = sign * fact * (2*l + 1) * integral / (4 * np.pi)
-        ell_str = f'{l},{m}'
-        res[f'ell{ell_str}'] = bell.real
+        res[ll] = bell
     return res
 
 def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2)], use_pdw_interp=False, 
@@ -251,25 +250,25 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2
         nz = len(comet_params['z'])
         bfull_flat = bfull.reshape(n, -1, nz)
         for ll in ell:
-            res[f'{ll}'] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[f'{ll}'])
+            res[ll] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[ll])
     else:
         # Reshape bfull to (n, nmu1 * nmu12 * nphi) for a blazing fast BLAS matrix-vector product
         bfull_flat = bfull.reshape(n, -1)
         for ll in ell:
-            #res[f'{ll}'] = bfull_flat @ proj_ops[f'{ll}']
-            res[f'{ll}'] = np.dot(bfull_flat, proj_ops[f'{ll}'])
+            #res[ll] = bfull_flat @ proj_ops[ll]
+            res[ll] = np.dot(bfull_flat, proj_ops[ll])
             if interpolate_k1k2:
-                grid_values = res[f'{ll}'].reshape(interp_grid_size, interp_grid_size)
+                grid_values = res[ll].reshape(interp_grid_size, interp_grid_size)
                 if k1k2_interp_method == 'linear':
                     interp_func = RegularGridInterpolator(
                         (k1_grid, k2_grid),
                         grid_values,
                         method='linear',
                     )
-                    res[f'{ll}'] = interp_func(interp_points)
+                    res[ll] = interp_func(interp_points)
                 elif k1k2_interp_method == 'cubic':
                     interp_func = RectBivariateSpline(k1_grid, k2_grid, grid_values, kx=3, ky=3, s=0)
-                    res[f'{ll}'] = interp_func.ev(interp_points[:, 0], interp_points[:, 1])
+                    res[ll] = interp_func.ev(interp_points[:, 0], interp_points[:, 1])
                 else:
                     raise ValueError(f"Unsupported k1k2_interp_method: {k1k2_interp_method}")
 
@@ -315,11 +314,11 @@ def bispectrum_sugiyama_proj_alt(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 
         nz = len(comet_params['z'])
         bfull_flat = bfull.reshape(n, -1, nz)
         for ll in ell:
-            res[f'{ll}'] = np.einsum('ijk,j->ik', bfull_flat, proj_op[f'{ll}'])
+            res[ll] = np.einsum('ijk,j->ik', bfull_flat, proj_op[ll])
     else:
         bfull_flat = bfull.reshape(n, -1)
         for ll in ell:
-            res[f'{ll}'] = bfull_flat @ proj_op[f'{ll}']
+            res[ll] = bfull_flat @ proj_op[ll]
 
     return res
 
@@ -354,7 +353,7 @@ def get_cached_proj_operator(nmu1, nmu12, nphi, ell, w_mu1, w_mu12, w_phi, mu1, 
         
         # Flatten the operator for faster dot products later
         prefactor = h *(2*l1 + 1) * (2*l2 + 1) * (2*L + 1) / (8 * np.pi)
-        res_ops[f'{ll}'] = np.real(proj_operator.ravel() * prefactor)
+        res_ops[ll] = np.real(proj_operator.ravel() * prefactor)
         
     _PROJ_CACHE[cache_key] = res_ops
     return res_ops
@@ -388,7 +387,7 @@ def get_cached_proj_operator_alt(nmu1, nmu2, nphi12, ell, w_mu1, w_mu2, w_phi12,
         
         # Flatten the operator for faster dot products later
         prefactor = h *(2*l1 + 1) * (2*l2 + 1) * (2*L + 1) / (8 * np.pi)
-        res_ops[f'{ll}'] = np.real(proj_operator.ravel() * prefactor)
+        res_ops[ll] = np.real(proj_operator.ravel() * prefactor)
         
     _PROJ_CACHE_ALT[cache_key] = res_ops
     return res_ops
@@ -465,7 +464,7 @@ def bX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
             b0 = np.ones((k1.shape[0], len(comet_params['z']))) * bfull[0, 0, 0, :]
         else:
             b0 = np.ones(k1.shape[0]) * bfull[0, 0, 0]
-        res = {f'ell{ll}': b0 if ll == 0 else np.zeros_like(b0) for ll in ell}
+        res = {ll: b0 if ll == (0, 0) else np.zeros_like(b0) for ll in ell}
         return res
         
     n = k1.shape[0]
@@ -489,13 +488,13 @@ def bX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
             integral = np.dot(bfull_flat, proj_op)
             
         bell = (2*ll + 1) * integral / (4 * np.pi)
-        res[f'ell{ll}'] = bell.real
+        res[ll] = bell
     return res
 
 
 def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, **kwargs):
     nmu1, nmu12, nphi = kwargs.pop('nmu1', 5), kwargs.pop('nmu12', 12), kwargs.pop('nphi', 5)
-    mu12_transform = kwargs.pop('mu12_transform', 'quartic')
+    mu12_transform = kwargs.pop('mu12_transform', 'quadratic')
     mu1, w_mu1 = np.polynomial.legendre.leggauss(nmu1)
     
     # Resolves k3 ~ 0 singularity when k1 ~ k2 while perfectly preserving _PROJ_CACHE
@@ -533,7 +532,7 @@ def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, **kwargs):
             b0 = np.ones((k1.shape[0], len(comet_params['z']))) * bfull[0, 0, 0, 0, :]
         else:
             b0 = np.ones(k1.shape[0]) * bfull[0, 0, 0, 0]
-        res = {f'{ll}': b0 if ll == '000' else np.zeros_like(b0) for ll in ell}
+        res = {ll: b0 if ll == (0, 0, 0) else np.zeros_like(b0) for ll in ell}
         return res
 
     proj_ops = get_cached_proj_operator(nmu1=nmu1,
@@ -553,11 +552,11 @@ def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, **kwargs):
         nz = len(comet_params['z'])
         bfull_flat = bfull.reshape(bfull.shape[0], -1, nz)
         for ll in ell:
-            res[f'{ll}'] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[f'{ll}'])
+            res[ll] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[ll])
     else:
         bfull_flat = bfull.reshape(bfull.shape[0], -1)
         for ll in ell:
-            res[f'{ll}'] = bfull_flat @ proj_ops[f'{ll}']
+            res[ll] = bfull_flat @ proj_ops[ll]
     return res
 
 
