@@ -4,8 +4,8 @@ from params import Params
 
 class BaseSampler:
     """Base class for samplers"""
-    def __init__(self, params: Params, likelihood):
-        self.params = params
+    def __init__(self, likelihood):
+        self.params = likelihood.params
         self.likelihood = likelihood
 
     def log_prior(self, param_values):
@@ -30,8 +30,8 @@ class BaseSampler:
 
 class NautilusSampler(BaseSampler):
     """Sampler using the Nautilus algorithm"""
-    def __init__(self, params: Params, likelihood, **kwargs):
-        super().__init__(params, likelihood)
+    def __init__(self, likelihood, **kwargs):
+        super().__init__(likelihood)
         from nautilus import Sampler
         
         # 1. Build the Prior object using our Params helper
@@ -89,8 +89,8 @@ class NautilusSampler(BaseSampler):
 
 class MinuitMinimizer(BaseSampler):
     """Wrapper for the iMinuit minimizer"""
-    def __init__(self, params: Params, likelihood, initial_step=0.1, verbose=False):
-        super().__init__(params, likelihood)
+    def __init__(self, likelihood, initial_step=0.1, verbose=False):
+        super().__init__(likelihood)
         from iminuit import Minuit
             
         # 1. Define the cost function (Total Chi2 = Chi2_data + Chi2_prior)

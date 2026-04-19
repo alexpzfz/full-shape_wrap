@@ -243,6 +243,10 @@ class JointObservable(Observable):
                 cov[obs1.n_data:, obs1.n_data:] /= hfact2**2
                 cov[:obs1.n_data, obs1.n_data:] /= hfact1 * hfact2
                 cov[obs1.n_data:, :obs1.n_data] /= hfact1 * hfact2
+            
+            # assign the covariance blocks to the corresponding observables (mostly for plotting purposes, since the full covariance is stored in the joint observable)
+            obs1.cov = cov[:obs1.n_data, :obs1.n_data]
+            obs2.cov = cov[obs1.n_data:, obs1.n_data:]
                 
         super().__init__(x, y, cov=cov, nbar=obs1.nbar, cosmo_fid=obs1.cosmo_fid, nmocks_cov=nmocks_cov)
 

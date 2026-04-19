@@ -88,7 +88,7 @@ class COMET(comet, BaseModel):
         self._extra_diagrams = ['Pctr_a0', 'Pctr_a2', 'Pctr_a4']
         self._extra_diagrams_to_marg = {'a0': 'Pctr_a0', 'a2': 'Pctr_a2', 'a4': 'Pctr_a4'}
         self.bispec_kwargs = {'soccimarro': {'nmu': 5, 'nphi': 5}, 
-                              'sugiyama': {'nmu1': 5, 'nmu12': 12, 'nphi': 5, 'mu12_transform': 'quartic'}}
+                              'sugiyama': {'nmu1': 5, 'nmu12': 12, 'nphi': 5, 'mu12_transform': 'quadratic'}}
 
     def predict_power_spectrum_multipoles(self, observables, params, de_model):
         ell_all = list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)]))
@@ -229,7 +229,7 @@ class COMET(comet, BaseModel):
             
             for ll in ell:
                 idx = segment_indices[segment_idx]
-                bell_slice = bell_batched[f'ell{ll}'][idx]
+                bell_slice = bell_batched[ll][idx]
                 if is_batched:
                     bell_slice = bell_slice[:, iz]
                 bk_z.append(bell_slice)
@@ -280,7 +280,7 @@ class COMET(comet, BaseModel):
             
             for ll in ell:
                 idx = segment_indices[segment_idx]
-                bell_slice = bell_batched[f'{ll}'][idx]
+                bell_slice = bell_batched[ll][idx]
                 if is_batched:
                     bell_slice = bell_slice[:, iz]
                 bk_z.append(bell_slice)
@@ -341,9 +341,8 @@ class COMET(comet, BaseModel):
             bX_z = []
             
             for ll in ell:
-                ell_key = f'ell{ll}' if is_scoccimarro else f'{ll}'
                 idx = segment_indices[segment_idx]
-                bX_slice = bX_batched[ell_key][idx]
+                bX_slice = bX_batched[ll][idx]
                 if is_batched:
                     bX_slice = bX_slice[:, iz]
                 bX_z.append(bX_slice)
@@ -410,7 +409,7 @@ class COMET(comet, BaseModel):
         bscocc = bispectrum_scoccimarro_proj(k1, k2, k3, self, params, ell=ell, de_model=de_model, **self.bispec_kwargs['soccimarro']) #shape (ntri, n_ell)
         res = {}
         for i, ll in enumerate(ell):
-            res[f'ell{ll}'] = bscocc[f'ell{ll}'][idx_inverse[idx_ell[i]:idx_ell[i]+len(tri[i])]] if idx_inverse is not None else bscocc[f'ell{ll}']
+            res[ll] = bscocc[ll][idx_inverse[idx_ell[i]:idx_ell[i]+len(tri[i])]] if idx_inverse is not None else bscocc[ll]
         return res
     
     def Bell_sugiyama(self, pair, params, ell, de_model):
@@ -427,7 +426,7 @@ class COMET(comet, BaseModel):
         bsugi = bispectrum_sugiyama_proj(k1, k2, self, params, ell=ell, de_model=de_model, **self.bispec_kwargs['sugiyama']) #shape (npair, n_ell)
         res = {}
         for i, ll in enumerate(ell):
-            res[f'{ll}'] = bsugi[f'{ll}'][idx_inverse][idx_ell[i]:idx_ell[i+1]] if idx_inverse is not None else bsugi[f'{ll}']
+            res[ll] = bsugi[ll][idx_inverse][idx_ell[i]:idx_ell[i+1]] if idx_inverse is not None else bsugi[ll]
         return res
 
     def BX_ell_scoccimarro(self, tri, params, ell, diagram, de_model):
@@ -444,7 +443,7 @@ class COMET(comet, BaseModel):
         bX_scocc = bX_ell_scoccimarro(k1, k2, k3, self, params, ell=ell, diagram=diagram, de_model=de_model, **self.bispec_kwargs['soccimarro']) #shape (ntri, n_ell)
         res = {}
         for i, ll in enumerate(ell):
-            res[f'ell{ll}'] = bX_scocc[f'ell{ll}'][idx_inverse][idx_ell[i]:idx_ell[i]+len(tri[i])] if idx_inverse is not None else bX_scocc[f'ell{ll}']
+            res[ll] = bX_scocc[ll][idx_inverse][idx_ell[i]:idx_ell[i]+len(tri[i])] if idx_inverse is not None else bX_scocc[ll]
         return res
     
     def BX_ell_sugiyama(self, pair, params, ell, diagram, de_model):
@@ -460,6 +459,6 @@ class COMET(comet, BaseModel):
         bX_sugi = bX_ell_sugiyama(k1, k2, self, params, ell=ell, diagram=diagram, de_model=de_model, **self.bispec_kwargs['sugiyama']) #shape (npair, n_ell)
         res = {}
         for i, ll in enumerate(ell):
-            res[f'{ll}'] = bX_sugi[f'{ll}'][idx_inverse][idx_ell[i]:idx_ell[i+1]] if idx_inverse is not None else bX_sugi[f'{ll}']
+            res[ll] = bX_sugi[ll][idx_inverse][idx_ell[i]:idx_ell[i+1]] if idx_inverse is not None else bX_sugi[ll]
         return res
         

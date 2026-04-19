@@ -3,9 +3,23 @@ from observables import Observable, PowerSpectrumMultipoles
 import params
 
 class Likelihood:
-    """Base class for likelihoods"""
-    def __init__(self, observables, emu, params, am_params=None,
-                 am_sample = True, conditional_prior=None):
+    """Base class for likelihoods
+    
+    Parameters
+    ----------
+    observables : Observable or list of Observable
+        The observable(s) to use for the likelihood
+    params : Params
+        Parameter configuration object (which holds the emulator)
+    am_params : str or list, optional
+        Analytical marginalization parameters
+    am_sample : bool, default True
+        Whether to sample AM parameters conditionally
+    conditional_prior : callable, optional
+        A function that checks prior conditions on the full parameter dict
+    """
+    def __init__(self, observables, params, am_params=None,
+                 am_sample=True, conditional_prior=None):
         self.observables = observables if isinstance(observables, list) else [observables]
         # sort observables by redshift
         if len(self.observables) > 1:
@@ -19,8 +33,9 @@ class Likelihood:
         self._rescale_covariance(mode='Hartlap')
         # self.icov = np.linalg.inv(self.cov)
         self.lcovs = [np.linalg.cholesky(obs.cov) for obs in self.observables]
-        self.emu = emu
+        
         self.params = params
+        self.emu = self.params.emu  # Access emu through params
         self.de_model = self.params.de_model
         # self.x = observable.x
         # self.xwin = observable.xwin

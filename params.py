@@ -2,6 +2,25 @@ import numpy as np
 import dataclasses
 from typing import Callable, Optional, Union
 from functools import partial
+import yaml
+import os
+
+def _load_default_parameters():
+    """Load default parameter configurations from YAML file."""
+    yaml_path = os.path.join(os.path.dirname(__file__), 'params.yaml')
+    with open(yaml_path, 'r') as f:
+        return yaml.safe_load(f)
+
+def _create_parameter_from_dict(name, param_dict):
+    """Create a Parameter object from a dictionary loaded from YAML."""
+    return Parameter(
+        name=name,
+        value=param_dict.get('value', 0.0),
+        prior=tuple(param_dict.get('prior', [None, None])) if param_dict.get('prior') else None,
+        prior_type=param_dict.get('prior_type', 'uniform'),
+        fixed=param_dict.get('fixed', False),
+        latex=param_dict.get('latex', '')
+    )
 
 @dataclasses.dataclass
 class Parameter:
@@ -19,60 +38,42 @@ class Parameter:
     latex: str = ""
 
 
-_cosmo_params = [
-    Parameter(name="wc", value=0.12, prior=(0.085, 0.155), prior_type="uniform", fixed=False, latex=r"\omega_c"),
-    Parameter(name="wb", value=0.022, prior=(0.0205, 0.02415), prior_type="uniform", fixed=False, latex=r"\omega_b"),
-    Parameter(name="h", value=0.67, prior=(0.55, 0.85), prior_type="uniform", fixed=False, latex=r"h"),
-    Parameter(name="ns", value=0.965, prior=(0.92, 1.01), prior_type="uniform", fixed=False, latex=r"n_s"),
-    Parameter(name="As", value=2.1, prior=(1., 3.), prior_type="uniform", fixed=False, latex=r"10^9 A_s"),
-    Parameter(name="Mnu", value=0.0, prior=(0.0, 0.5), prior_type="uniform", fixed=True, latex=r"\sum m_\nu"),
-    Parameter(name="w0", value=-1.0, prior=(-2.0, -0.33), prior_type="uniform", fixed=True, latex=r"w_0"),
-    Parameter(name="wa", value=0.0, prior=(-2.0, 2.0), prior_type="uniform", fixed=True, latex=r"w_a"),
-    Parameter(name="Ok", value=0.0, prior=(-0.1, 0.1), prior_type="uniform", fixed=True, latex=r"\Omega_k"),
-]
+_default_params = _load_default_parameters()
 
-_bias_params = {"EggScoSmi": [
-    Parameter(name="b1", value=1.0, prior=(0.5, 4.0), prior_type="uniform", fixed=False, latex=r"b_1"),
-    Parameter(name="b2", value=0.0, prior=(-2.0, 2.0), prior_type="uniform", fixed=False, latex=r"b_2"),
-    Parameter(name='g2', value=0.0, prior=(-5.0, 5.0), prior_type="uniform", fixed=True, latex=r"\gamma_2"),
-    Parameter(name='g21', value=0.0, prior=(-5.0, 5.0), prior_type="uniform", fixed=True, latex=r"\gamma_{21}"),],
-    
-    "AssBauGre": [
-    Parameter(name="b1", value=1.0, prior=(0.5, 4.0), prior_type="uniform", fixed=False, latex=r"b_1"),
-    Parameter(name="b2", value=0.0, prior=(-2.0, 2.0), prior_type="uniform", fixed=False, latex=r"b_2"),
-    Parameter(name="bG2", value=0.0, prior=(-5.0, 5.0), prior_type="uniform", fixed=True, latex=r"b_{G_{2}}"),
-    Parameter(name="bGam3", value=0.0, prior=(-5.0, 5.0), prior_type="uniform", fixed=True, latex=r"b_{\Gamma_{3}}"),],
+# Load cosmological parameters from YAML
+_cosmo_params = [_create_parameter_from_dict(name, param_dict) 
+                 for name, param_dict in _default_params['cosmological'].items()]
 
-    "DesJeoSch": [
-    Parameter(name="b1", value=1.0, prior=(0.1, 8.0), prior_type="uniform", fixed=False, latex=r"b_1"),
-    Parameter(name="b2t", value=0.0, prior=(0, 20), prior_type="gaussian", fixed=False, latex=r"b_2"),
-    Parameter(name="bK2", value=0.0, prior=(0, 20), prior_type="gaussian", fixed=False, latex=r"b_{K^2}"),
-    Parameter(name="btd", value=0.0, prior=(0, 80), prior_type="gaussian", fixed=False, latex=r"b_{\rm td}"),]}
+# Load bias parameters from YAML
+_bias_params = {}
+for basis_name, basis_params in _default_params['bias'].items():
+    _bias_params[basis_name] = [_create_parameter_from_dict(name, param_dict) 
+                                for name, param_dict in basis_params.items()]
 
-_bias_params["DesJeoSch_r"] = [Parameter(name=p.name + "r", value=p.value, prior=p.prior, prior_type=p.prior_type, fixed=p.fixed, latex=p.latex + "^r") for p in _bias_params["DesJeoSch"]]
+# Create DesJeoSch_r variant
+_bias_params["DesJeoSch_r"] = [dataclasses.replace(p, name=p.name + "r", latex=p.latex + "^r") 
+                                for p in _bias_params["DesJeoSch"]]
 
-_extra_params = {'VDG_infty': [Parameter(name="avir", value=5.0, prior=(0.0, 10.0), prior_type="uniform", fixed=True, latex=r"a_{\rm vir}")],
-                 'EFT': [Parameter(name="cnlo", value=0.0, prior=(0.0, 10.0), prior_type="gaussian", fixed=True, latex=r"c_{\rm nlo}")]}
-# _damping_params = [Parameter(name="avir", value=5.0, prior=(0.0, 10.0), prior_type="uniform", fixed=True, latex=r"a_{\rm vir}")]
+# Load extra parameters from YAML
+_extra_params = {}
+for extra_type, extra_params in _default_params['extra'].items():
+    _extra_params[extra_type] = [_create_parameter_from_dict(name, param_dict) 
+                                 for name, param_dict in extra_params.items()]
 
-_counterterm_params = {"Comet": [   
-    Parameter(name="c0", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"c_0"),
-    Parameter(name="c2", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"c_2"),
-    Parameter(name="c4", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"c_4"),],
-    
-    "DESI": [
-    Parameter(name="a0", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"\alpha_0"),
-    Parameter(name="a2", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"\alpha_2"),
-    Parameter(name="a4", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"\alpha_4"),]}
-_counterterm_params["DESI_r"] = [Parameter(name=p.name + "r", value=p.value, prior=p.prior, prior_type=p.prior_type, fixed=p.fixed, latex=p.latex + "^r") for p in _counterterm_params["DESI"]]
+# Load counterterm parameters from YAML
+_counterterm_params = {}
+for basis_name, basis_params in _default_params['counterterms'].items():
+    _counterterm_params[basis_name] = [_create_parameter_from_dict(name, param_dict) 
+                                       for name, param_dict in basis_params.items()]
 
-_stochastic_params = [
-    Parameter(name="NP0", value=0.0, prior=(-1., 3.), prior_type="uniform", fixed=True, latex=r"N^P_0"),
-    Parameter(name="NP20", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"N^P_{2,0}"),
-    Parameter(name="NP22", value=0.0, prior=(-1e4, 1e4), prior_type="uniform", fixed=True, latex=r"N^P_{2,2}"),
-    Parameter(name="NB0", value=0.0, prior=(-1., 3.), prior_type="uniform", fixed=True, latex=r"N^B_0"),
-    Parameter(name="MB0", value=0.0, prior=(-3., 3.), prior_type="uniform", fixed=True, latex=r"M^B_0"),
-]
+# Create DESI_r variant
+_counterterm_params["DESI_r"] = [dataclasses.replace(p, name=p.name + "r", latex=p.latex + "^r") 
+                                  for p in _counterterm_params["DESI"]]
+
+# Load stochastic parameters from YAML
+_stochastic_params = [_create_parameter_from_dict(name, param_dict) 
+                      for name, param_dict in _default_params['stochastic'].items()]
+
 
 
 
