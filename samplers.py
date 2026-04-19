@@ -145,7 +145,7 @@ class MinuitMinimizer(BaseSampler):
         if verbose:
             print(f"Initialized Minuit with {len(self.params.sampled_param_names)} free parameters.")
 
-    def run(self, hesse=False, strategy=2, tol=0.1, max_calls=(200000, 800000, 2000000),
+    def run(self, hesse=False, strategy=1, tol=0.1, max_calls=(200000, 800000, 2000000),
             simplex_on_retry=True, verbose=True):
         """
         Run the minimization with robust retries.

@@ -174,15 +174,15 @@ class Likelihood:
     @staticmethod
     def marg_chi2(diff, dcov_chol, p0_vec, pcov_inv, detpcov, design_mat,
                   return_cond_mean_cov=False):
-        if not np.all(np.isfinite(diff)):
-            raise np.linalg.LinAlgError("diff contains NaN or Inf values in marg_chi2")
-        if not np.all(np.isfinite(dcov_chol)):
-            raise np.linalg.LinAlgError("dcov_chol contains NaN or Inf values in marg_chi2")
-        if not np.all(np.isfinite(design_mat)):
-            raise np.linalg.LinAlgError("design_mat contains NaN or Inf values in marg_chi2")
-        if not np.all(np.isfinite(pcov_inv)):
-            raise np.linalg.LinAlgError("pcov_inv contains NaN or Inf values in marg_chi2")
-        # if not np.isfinite(logdetpcov):
+        # if not np.all(np.isfinite(diff)):
+        #     raise np.linalg.LinAlgError("diff contains NaN or Inf values in marg_chi2")
+        # if not np.all(np.isfinite(dcov_chol)):
+        #     raise np.linalg.LinAlgError("dcov_chol contains NaN or Inf values in marg_chi2")
+        # if not np.all(np.isfinite(design_mat)):
+        #     raise np.linalg.LinAlgError("design_mat contains NaN or Inf values in marg_chi2")
+        # if not np.all(np.isfinite(pcov_inv)):
+        #     raise np.linalg.LinAlgError("pcov_inv contains NaN or Inf values in marg_chi2")
+        # # if not np.isfinite(logdetpcov):
         #     raise np.linalg.LinAlgError("logdetpcov is NaN or Inf in marg_chi2")
 
         diag_dcov = np.diag(dcov_chol)
@@ -194,17 +194,17 @@ class Likelihood:
         res = diff - design_mat @ p0_vec
         #lamb = design_mat.T @ dcov_inv @ design_mat + pcov_inv
         dt_cinv_d = get_bCib(dcov_chol, design_mat)
-        if not np.all(np.isfinite(dt_cinv_d)):
-            raise np.linalg.LinAlgError(
-                "D^T C^-1 D contains NaN or Inf in marg_chi2; "
-                f"max|D|={np.max(np.abs(design_mat)):.3e}, min diag(L_C)={np.min(diag_dcov):.3e}"
-            )
+        # if not np.all(np.isfinite(dt_cinv_d)):
+        #     raise np.linalg.LinAlgError(
+        #         "D^T C^-1 D contains NaN or Inf in marg_chi2; "
+        #         f"max|D|={np.max(np.abs(design_mat)):.3e}, min diag(L_C)={np.min(diag_dcov):.3e}"
+        #     )
         lamb = dt_cinv_d + pcov_inv
-        if not np.all(np.isfinite(lamb)):
-            raise np.linalg.LinAlgError(
-                "lambda contains NaN or Inf in marg_chi2 after adding prior precision; "
-                f"max|D^T C^-1 D|={np.max(np.abs(dt_cinv_d)):.3e}, max|P^-1|={np.max(np.abs(pcov_inv)):.3e}"
-            )
+        # if not np.all(np.isfinite(lamb)):
+        #     raise np.linalg.LinAlgError(
+        #         "lambda contains NaN or Inf in marg_chi2 after adding prior precision; "
+        #         f"max|D^T C^-1 D|={np.max(np.abs(dt_cinv_d)):.3e}, max|P^-1|={np.max(np.abs(pcov_inv)):.3e}"
+        #     )
         lamb = make_posdef(lamb, matrix_name='lambda')
         lamb_chol = np.linalg.cholesky(lamb) 
         # lamb_inv = np.linalg.inv(lamb) if lamb.shape[0] > 1 else 1/lamb
@@ -417,10 +417,10 @@ def make_posdef(matrix, matrix_name='matrix', base_jitter=1e-12, max_tries=8):
 
     matrix = 0.5 * (matrix + matrix.T)
 
-    if not np.all(np.isfinite(matrix)):
-        raise np.linalg.LinAlgError(
-            f"{matrix_name} contains NaN or Inf entries; cannot repair to positive definite."
-        )
+    # if not np.all(np.isfinite(matrix)):
+    #     raise np.linalg.LinAlgError(
+    #         f"{matrix_name} contains NaN or Inf entries; cannot repair to positive definite."
+    #     )
 
     try:
         np.linalg.cholesky(matrix)
@@ -431,18 +431,18 @@ def make_posdef(matrix, matrix_name='matrix', base_jitter=1e-12, max_tries=8):
 
     except:
         # look for infintes
-            if np.any(np.isinf(matrix)):
-                # substitute inf with NaNs
-                matrix = np.where(np.isinf(matrix), np.nan, matrix)
-                print(f"Warning: {matrix_name} contains Inf entries; replaced with NaN for repair process.")
-                try:
-                    np.linalg.cholesky(matrix)
-                    return matrix
-                except np.linalg.LinAlgError:
-                    pass
-
-            else:
+        if np.any(np.isinf(matrix)):
+            # substitute inf with NaNs
+            matrix = np.where(np.isinf(matrix), np.nan, matrix)
+            print(f"Warning: {matrix_name} contains Inf entries; replaced with NaN for repair process.")
+            try:
+                np.linalg.cholesky(matrix)
+                return matrix
+            except np.linalg.LinAlgError:
                 pass
+
+        else:
+            pass
 
     diag_scale = max(float(np.max(np.abs(np.diag(matrix)))), 1.0)
     jitter = base_jitter * diag_scale

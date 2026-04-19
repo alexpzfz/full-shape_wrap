@@ -392,7 +392,7 @@ def get_cached_proj_operator_alt(nmu1, nmu2, nphi12, ell, w_mu1, w_mu2, w_phi12,
     _PROJ_CACHE_ALT[cache_key] = res_ops
     return res_ops
 
-def bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, **kwargs):
+def bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, use_pdw_interp=False, **kwargs):
     # only supporting NP0, NB0 and MB0\
     params = emu.params
     nbar = emu.nbar
@@ -421,20 +421,31 @@ def bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, **kwargs):
     k3_p, mu3_p = apply_ap(k3, mu3, qpar, qperp)
     # k1, k2, k3 are either arrays of any shape or floats
     k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
-    kunique = np.unique(k_all)
-    pdw = emu.Pdw(kunique, comet_params, mu=0.6, **kwargs)
-    
-    is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
-    if is_batched:
-        nz = len(comet_params['z'])
-        batch_idx = np.arange(nz)
-        pdw1 = pdw[np.searchsorted(kunique, k1_p), batch_idx]
-        pdw2 = pdw[np.searchsorted(kunique, k2_p), batch_idx]
-        pdw3 = pdw[np.searchsorted(kunique, k3_p), batch_idx]
+
+    if not use_pdw_interp:
+        kunique = np.unique(k_all)
+        pdw = emu.Pdw(kunique, comet_params, mu=0.6, **kwargs)
+        
+        is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
+
+        if is_batched:
+            nz = len(comet_params['z'])
+            batch_idx = np.arange(nz)
+            pdw1 = pdw[np.searchsorted(kunique, k1_p), batch_idx]
+            pdw2 = pdw[np.searchsorted(kunique, k2_p), batch_idx]
+            pdw3 = pdw[np.searchsorted(kunique, k3_p), batch_idx]
+        else:
+            pdw1 = pdw[np.searchsorted(kunique, k1_p)]
+            pdw2 = pdw[np.searchsorted(kunique, k2_p)]
+            pdw3 = pdw[np.searchsorted(kunique, k3_p)]
     else:
-        pdw1 = pdw[np.searchsorted(kunique, k1_p)]
-        pdw2 = pdw[np.searchsorted(kunique, k2_p)]
-        pdw3 = pdw[np.searchsorted(kunique, k3_p)]
+        kmin, kmax = np.min(k_all), np.max(k_all)
+        kgrid = np.logspace(np.log10(kmin*0.9), np.log10(kmax*1.1), 1000)
+        pdw_grid = emu.Pdw(kgrid, comet_params, mu=0.6, **kwargs)
+        pdw_interp = interp1d(kgrid, pdw_grid, kind='cubic')
+        pdw1 = pdw_interp(k1_p)
+        pdw2 = pdw_interp(k2_p)
+        pdw3 = pdw_interp(k3_p)
     
     bstoch = stoch_term(k1_p, mu1_p, b1, f, avir, sv, MB0, NP0) * pdw1 + \
              stoch_term(k2_p, mu2_p, b1, f, avir, sv, MB0, NP0) * pdw2 + \
@@ -492,7 +503,7 @@ def bX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
     return res
 
 
-def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, **kwargs):
+def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, use_pdw_interp=False, **kwargs):
     nmu1, nmu12, nphi = kwargs.pop('nmu1', 5), kwargs.pop('nmu12', 12), kwargs.pop('nphi', 5)
     mu12_transform = kwargs.pop('mu12_transform', 'quadratic')
     mu1, w_mu1 = np.polynomial.legendre.leggauss(nmu1)
@@ -523,7 +534,7 @@ def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, **kwargs):
     mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi) # shape (ntri, nmu1, nmu12, nphi)
     
     bfull = bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram=diagram,
-                  **kwargs) # shape (ntri, nmu1, nmu12, nphi)
+                  use_pdw_interp=use_pdw_interp, **kwargs) # shape (ntri, nmu1, nmu12, nphi)
                   
     is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
     
