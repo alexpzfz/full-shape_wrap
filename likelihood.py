@@ -410,8 +410,24 @@ def make_posdef(matrix, matrix_name='matrix', base_jitter=1e-12, max_tries=8):
     try:
         np.linalg.cholesky(matrix)
         return matrix
-    except np.linalg.LinAlgError:
-        pass
+
+    # except np.linalg.LinAlgError:
+    #     pass
+
+    except:
+        # look for infintes
+            if np.any(np.isinf(matrix)):
+                # substitute inf with NaNs
+                matrix = np.where(np.isinf(matrix), np.nan, matrix)
+                print(f"Warning: {matrix_name} contains Inf entries; replaced with NaN for repair process.")
+                try:
+                    np.linalg.cholesky(matrix)
+                    return matrix
+                except np.linalg.LinAlgError:
+                    pass
+
+            else:
+                pass
 
     diag_scale = max(float(np.max(np.abs(np.diag(matrix)))), 1.0)
     jitter = base_jitter * diag_scale
