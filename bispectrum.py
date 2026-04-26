@@ -47,7 +47,9 @@ def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, use_pdw_interp=False
         kmin, kmax = np.min(k_all), np.max(k_all)
         kgrid = np.logspace(np.log10(kmin*0.9), np.log10(kmax*1.1), 1000)
         pdw_grid = emu.Pdw(kgrid, comet_params, mu=0.6, **kwargs)
-        pdw_interp = interp1d(kgrid, pdw_grid, kind='cubic')
+
+        #handle multiz case by interpolating each redshift separately and stacking the results
+        pdw_interp = interp1d(kgrid, pdw_grid, axis=0, kind='cubic')
         pdw1 = pdw_interp(k1_p)
         pdw2 = pdw_interp(k2_p)
         pdw3 = pdw_interp(k3_p)
@@ -442,7 +444,7 @@ def bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, use_pdw_interp=False
         kmin, kmax = np.min(k_all), np.max(k_all)
         kgrid = np.logspace(np.log10(kmin*0.9), np.log10(kmax*1.1), 1000)
         pdw_grid = emu.Pdw(kgrid, comet_params, mu=0.6, **kwargs)
-        pdw_interp = interp1d(kgrid, pdw_grid, kind='cubic')
+        pdw_interp = interp1d(kgrid, pdw_grid, axis=0, kind='cubic')
         pdw1 = pdw_interp(k1_p)
         pdw2 = pdw_interp(k2_p)
         pdw3 = pdw_interp(k3_p)
