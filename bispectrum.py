@@ -136,7 +136,7 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[(0, 0), (2, 
         l, m = ll
         m_ = abs(m)
         sign = (-1)**m if m < 0 else 1.
-        fact = 1 / np.sqrt(2) if m == 0 else 1.
+        fact = 1 / np.sqrt(2) if m != 0 else 1.
         ylm = sph_harm_real(l, m_, mu1, phi) # shape (1, nmu, nphi)
         weights = w_mu[None, :, None] * w_cphi
         proj_op = (ylm * weights).ravel()
