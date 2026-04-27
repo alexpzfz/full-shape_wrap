@@ -26,6 +26,9 @@ class Likelihood:
             print("Sorting observables by redshift...")
             self.observables.sort(key=lambda obs: obs.cosmo_fid['z'])
 
+        for i, obs in enumerate(self.observables):
+            obs._batch_iz = i
+
         self.nobservables = len(self.observables)
     
         self.covs = [obs.cov for obs in self.observables]

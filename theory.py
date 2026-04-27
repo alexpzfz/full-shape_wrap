@@ -22,20 +22,24 @@ class BaseModel:
             'bk_sugiyama': [],
         }
 
-        def add(group_name, observable):
+        def add(group_name, observable, parent=None):
+            if parent is not None and hasattr(parent, '_batch_iz'):
+                observable._batch_iz = parent._batch_iz
+            elif not hasattr(observable, '_batch_iz'):
+                observable._batch_iz = None
             grouped[group_name].append(observable)
             return len(grouped[group_name]) - 1
 
         assembly_plan = []
         for obs in observables:
             if isinstance(obs, PowerSpectrumMultipoles):
-                assembly_plan.append(('single', 'pk', add('pk', obs)))
+                assembly_plan.append(('single', 'pk', add('pk', obs, obs)))
             elif isinstance(obs, BispectrumScoccimarroMultipoles):
-                assembly_plan.append(('single', 'bk_scocc', add('bk_scocc', obs)))
+                assembly_plan.append(('single', 'bk_scocc', add('bk_scocc', obs, obs)))
             elif isinstance(obs, BispectrumSugiyamaMultipoles):
-                assembly_plan.append(('single', 'bk_sugiyama', add('bk_sugiyama', obs)))
+                assembly_plan.append(('single', 'bk_sugiyama', add('bk_sugiyama', obs, obs)))
             elif isinstance(obs, JointObservable):
-                pk_idx = add('pk', obs.observables[0])
+                pk_idx = add('pk', obs.observables[0], obs)
                 bk_obs = obs.observables[1]
                 if isinstance(bk_obs, BispectrumScoccimarroMultipoles):
                     bk_group = 'bk_scocc'
@@ -43,7 +47,7 @@ class BaseModel:
                     bk_group = 'bk_sugiyama'
                 else:
                     raise ValueError(f"Unsupported observable type in JointObservable: {type(bk_obs)}")
-                bk_idx = add(bk_group, bk_obs)
+                bk_idx = add(bk_group, bk_obs, obs)
                 assembly_plan.append(('joint', pk_idx, bk_group, bk_idx))
             else:
                 raise ValueError(f"Unsupported observable type: {type(obs)}")
@@ -122,7 +126,7 @@ class COMET(comet, BaseModel):
         segment_idx = 0
         
         for obs in observables:
-            iz = list(params['z']).index(obs.cosmo_fid['z']) if is_batched else None
+            iz = getattr(obs, '_batch_iz', None) if is_batched else None
             ell = obs.ell if obs.ellwin is None else obs.ellwin
             pell_z = []
             
@@ -174,7 +178,7 @@ class COMET(comet, BaseModel):
         segment_idx = 0
         
         for obs in observables:
-            iz = list(params['z']).index(obs.cosmo_fid['z']) if is_batched else None
+            iz = getattr(obs, '_batch_iz', None) if is_batched else None
             ell = obs.ell if obs.ellwin is None else obs.ellwin
             pX_z = []
             
@@ -223,7 +227,7 @@ class COMET(comet, BaseModel):
         segment_idx = 0
         
         for obs in observables:
-            iz = list(params['z']).index(obs.cosmo_fid['z']) if is_batched else None
+            iz = getattr(obs, '_batch_iz', None) if is_batched else None
             ell = obs.ell if obs.ellwin is None else obs.ellwin
             bk_z = []
             
@@ -274,7 +278,7 @@ class COMET(comet, BaseModel):
         segment_idx = 0
         
         for obs in observables:
-            iz = list(params['z']).index(obs.cosmo_fid['z']) if is_batched else None
+            iz = getattr(obs, '_batch_iz', None) if is_batched else None
             ell = obs.ell if obs.ellwin is None else obs.ellwin
             bk_z = []
             
@@ -336,7 +340,7 @@ class COMET(comet, BaseModel):
         segment_idx = 0
         
         for obs in observables:
-            iz = list(params['z']).index(obs.cosmo_fid['z']) if is_batched else None
+            iz = getattr(obs, '_batch_iz', None) if is_batched else None
             ell = obs.ell if obs.ellwin is None else obs.ellwin
             bX_z = []
             
