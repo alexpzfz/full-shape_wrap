@@ -47,12 +47,11 @@ def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, use_pdw_interp=False
         kmin, kmax = np.min(k_all), np.max(k_all)
         kgrid = np.logspace(np.log10(kmin*0.9), np.log10(kmax*1.1), 1000)
         pdw_grid = emu.Pdw(kgrid, comet_params, mu=0.6, **kwargs)
-
         #handle multiz case by interpolating each redshift separately and stacking the results
-        pdw_interp = interp1d(kgrid, pdw_grid, axis=0, kind='cubic')
-        pdw1 = pdw_interp(k1_p)
-        pdw2 = pdw_interp(k2_p)
-        pdw3 = pdw_interp(k3_p)
+        pdw_interp_list = [interp1d(kgrid, pdw_grid[:, j], axis=0, kind='cubic') for j in range(pdw_grid.shape[1])]
+        pdw1 = np.stack([pdw_interp_list[j](k1_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
+        pdw2 = np.stack([pdw_interp_list[j](k2_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
+        pdw3 = np.stack([pdw_interp_list[j](k3_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
 
     # tree level first
     btree = tree_term(k1_p, k2_p, mu1_p, mu2_p, k3_p, mu3_p, b1, b2, g2, f) * pdw1 * pdw2 + \
@@ -444,11 +443,11 @@ def bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, use_pdw_interp=False
         kmin, kmax = np.min(k_all), np.max(k_all)
         kgrid = np.logspace(np.log10(kmin*0.9), np.log10(kmax*1.1), 1000)
         pdw_grid = emu.Pdw(kgrid, comet_params, mu=0.6, **kwargs)
-        pdw_interp = interp1d(kgrid, pdw_grid, axis=0, kind='cubic')
-        pdw1 = pdw_interp(k1_p)
-        pdw2 = pdw_interp(k2_p)
-        pdw3 = pdw_interp(k3_p)
-    
+        pdw_interp_list = [interp1d(kgrid, pdw_grid[:, j], axis=0, kind='cubic') for j in range(pdw_grid.shape[1])]
+        pdw1 = np.stack([pdw_interp_list[j](k1_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
+        pdw2 = np.stack([pdw_interp_list[j](k2_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
+        pdw3 = np.stack([pdw_interp_list[j](k3_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
+
     bstoch = stoch_term(k1_p, mu1_p, b1, f, avir, sv, MB0, NP0) * pdw1 + \
              stoch_term(k2_p, mu2_p, b1, f, avir, sv, MB0, NP0) * pdw2 + \
              stoch_term(k3_p, mu3_p, b1, f, avir, sv, MB0, NP0) * pdw3
