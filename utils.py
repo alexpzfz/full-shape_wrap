@@ -1,7 +1,6 @@
 import numpy as np
 
-
-def cut_cov(cov, x, ell, xmin, xmax, ell_select=None):
+def cut_cov(cov, x, ell, xmin=-np.inf, xmax=np.inf, ell_select=None):
     if not isinstance(ell, list):
         ell= [ell]
     if not isinstance(x, list):
@@ -43,7 +42,7 @@ def cut_cov(cov, x, ell, xmin, xmax, ell_select=None):
 
 
 
-def cut_window(win, x, ell, xwin, ellwin, xmin, xmax, xwinmin, xwinmax, ell_select=None, ellwin_select=None):
+def cut_window(win, x, ell, xwin, ellwin, xmin=-np.inf, xmax=np.inf, xwinmin=-np.inf, xwinmax=np.inf, ell_select=None, ellwin_select=None):
     if not isinstance(ell, list):
         ell= [ell]
     if not isinstance(x, list):
