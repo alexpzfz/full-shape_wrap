@@ -169,6 +169,10 @@ class Params:
     @property
     def exported_derived_names(self):
         return [name for name, p in self.parameters.items() if (p.derived or p.derived_am) and p.exported]
+    
+    @property
+    def derived_am_names(self):
+        return [name for name, p in self.parameters.items() if p.derived_am]
         
 
     @property
@@ -188,6 +192,10 @@ class Params:
     def n_sampled_params(self):
         """Dynamically count number of free parameters"""
         return len(self.sampled_param_names)
+    
+    @property
+    def n_free_params(self):
+        return self.n_sampled_params + len(self.derived_am_names)
     
     @property
     def fixed_cosmo(self):

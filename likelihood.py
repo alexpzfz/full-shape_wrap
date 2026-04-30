@@ -31,11 +31,7 @@ class Likelihood:
 
         self.nobservables = len(self.observables)
     
-        self.covs = [obs.cov for obs in self.observables]
-        self.nmocks_covs = [obs.nmocks_cov for obs in self.observables]
-        self._rescale_covariance(mode='Hartlap')
-        # self.icov = np.linalg.inv(self.cov)
-        self.lcovs = [np.linalg.cholesky(obs.cov) for obs in self.observables]
+
         
         self.params = params
         self.emu = self.params.emu  # Access emu through params
@@ -128,17 +124,32 @@ class Likelihood:
             # self.am_params_0 = np.array([self.params.parameters[am_param].prior[0] for am_param in self.am_params])
             # self.am_inv_cov = np.diag([1/self.params.parameters[am_param].prior[1]**2 for am_param in self.am_params])
             # self.am_det_cov = np.prod([self.params.parameters[am_param].prior[1]**2 for am_param in self.am_params])
-            
-    def _rescale_covariance(self, mode='Hartlap'):
+        self.covs = [obs.cov.copy() for obs in self.observables]
+        self.nmocks_covs = [obs.nmocks_cov for obs in self.observables]
+        self._rescale_covariance(mode='Percival')
+        # self.icov = np.linalg.inv(self.cov)
+        self.lcovs = [np.linalg.cholesky(obs.cov) for obs in self.observables]
+    
+ 
+    def _rescale_covariance(self, mode='Percival'):
         for i, obs in enumerate(self.observables):
             n_data = obs.n_data
             n_mocks = self.nmocks_covs[i]
+            n_params = self.params.n_free_params
+
             if n_mocks is not None:
+                hartlap_factor = (n_mocks - n_data - 2) / (n_mocks - 1)
+
+                b = (n_mocks - n_data - 2) / ((n_mocks - n_data - 1) * (n_mocks - n_data - 4))
+                percival_factor = (n_mocks - n_data + n_params - 1) / ((n_mocks - 1) * (1 + b * (n_data - n_params)))
+                print('Rescaling covariance for observable {} with n_data={}, n_mocks={}, n_params={}'.format(i, n_data, n_mocks, n_params))
+                print('Hartlap factor: {:.3f}, Percival factor: {:.3f}'.format(hartlap_factor, percival_factor))
                 if mode == 'Hartlap':
-                    factor = (n_mocks - n_data - 2) / (n_mocks - 1)
+                    factor = hartlap_factor
+                elif mode == 'Percival':
+                    factor = percival_factor
                 else:
-                    raise NotImplementedError(f"Covariance rescaling mode '{mode}' not implemented")
-                print(f"Rescaling covariance by factor {1/factor:.3f} using {mode} correction: n_mocks={n_mocks}, n_data={n_data}")
+                    raise ValueError("Invalid mode for covariance rescaling. Choose 'Hartlap' or 'Percival'.")
                 self.covs[i] *= 1/factor
         #self.icov *= factor
 
