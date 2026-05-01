@@ -95,30 +95,39 @@ class COMET(comet, BaseModel):
                               'sugiyama': {'nmu1': 5, 'nmu12': 12, 'nphi': 5, 'mu12_transform': 'quadratic'}}
 
     def predict_power_spectrum_multipoles(self, observables, params, de_model):
-        ell_all = list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)]))
-        
-        # Collect all k values and track which observable/ell they belong to
-        k_segments = []  # List of (k_array, obs_idx, ell_idx)
-        for obs_idx, obs in enumerate(observables):
-            k = obs.k if obs.kwin is None else obs.kwin
-            ell = obs.ell if obs.ellwin is None else obs.ellwin
-            for ell_idx, k_ell in enumerate(k):
-                k_segments.append((k_ell, obs_idx, ell_idx))
-        
-        # Get unique k values and inverse indices (avoids searchsorted)
-        k_all_concat = np.concatenate([ks[0] for ks in k_segments])
-        k_all, inverse_indices = np.unique(k_all_concat, return_inverse=True)
+        cache_key = tuple(id(obs) for obs in observables)
+        if not hasattr(self, '_pk_cache'):
+            self._pk_cache = {}
+            
+        if cache_key not in self._pk_cache:
+            ell_all = list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)]))
+            
+            # Collect all k values and track which observable/ell they belong to
+            k_segments = []  # List of (k_array, obs_idx, ell_idx)
+            for obs_idx, obs in enumerate(observables):
+                k = obs.k if obs.kwin is None else obs.kwin
+                ell = obs.ell if obs.ellwin is None else obs.ellwin
+                for ell_idx, k_ell in enumerate(k):
+                    k_segments.append((k_ell, obs_idx, ell_idx))
+            
+            # Get unique k values and inverse indices (avoids searchsorted)
+            k_all_concat = np.concatenate([ks[0] for ks in k_segments])
+            k_all, inverse_indices = np.unique(k_all_concat, return_inverse=True)
+            
+            # Map inverse indices back to each segment
+            inverse_idx_offset = 0
+            segment_indices = []
+            for k_ell, _, _ in k_segments:
+                n_k = len(k_ell)
+                segment_indices.append(inverse_indices[inverse_idx_offset:inverse_idx_offset + n_k])
+                inverse_idx_offset += n_k
+                
+            self._pk_cache[cache_key] = (ell_all, k_all, segment_indices)
+            
+        ell_all, k_all, segment_indices = self._pk_cache[cache_key]
         
         # Evaluate model only at unique k values
         pell_batched = self.Pell(k_all, params, ell_all, de_model=de_model)
-        
-        # Map inverse indices back to each segment
-        inverse_idx_offset = 0
-        segment_indices = []
-        for k_ell, _, _ in k_segments:
-            n_k = len(k_ell)
-            segment_indices.append(inverse_indices[inverse_idx_offset:inverse_idx_offset + n_k])
-            inverse_idx_offset += n_k
         
         # Extract predictions for each observable
         preds = []
@@ -144,33 +153,42 @@ class COMET(comet, BaseModel):
         return preds
     
     def predict_power_spectrum_X_multipoles(self, observables, params, diagram, de_model):
-        ell_all = list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)]))
-        
-        # Collect all k values and track which observable/ell they belong to
-        k_segments = []  # List of (k_array, obs_idx, ell_idx)
-        for obs_idx, obs in enumerate(observables):
-            k = obs.k if obs.kwin is None else obs.kwin
-            ell = obs.ell if obs.ellwin is None else obs.ellwin
-            for ell_idx, k_ell in enumerate(k):
-                k_segments.append((k_ell, obs_idx, ell_idx))
-        
-        # Get unique k values and inverse indices
-        k_all_concat = np.concatenate([ks[0] for ks in k_segments])
-        k_all, inverse_indices = np.unique(k_all_concat, return_inverse=True)
+        cache_key = tuple(id(obs) for obs in observables)
+        if not hasattr(self, '_pk_X_cache'):
+            self._pk_X_cache = {}
+            
+        if cache_key not in self._pk_X_cache:
+            ell_all = list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)]))
+            
+            # Collect all k values and track which observable/ell they belong to
+            k_segments = []  # List of (k_array, obs_idx, ell_idx)
+            for obs_idx, obs in enumerate(observables):
+                k = obs.k if obs.kwin is None else obs.kwin
+                ell = obs.ell if obs.ellwin is None else obs.ellwin
+                for ell_idx, k_ell in enumerate(k):
+                    k_segments.append((k_ell, obs_idx, ell_idx))
+            
+            # Get unique k values and inverse indices
+            k_all_concat = np.concatenate([ks[0] for ks in k_segments])
+            k_all, inverse_indices = np.unique(k_all_concat, return_inverse=True)
+            
+            # Map inverse indices back to each segment
+            inverse_idx_offset = 0
+            segment_indices = []
+            for k_ell, _, _ in k_segments:
+                n_k = len(k_ell)
+                segment_indices.append(inverse_indices[inverse_idx_offset:inverse_idx_offset + n_k])
+                inverse_idx_offset += n_k
+                
+            self._pk_X_cache[cache_key] = (ell_all, k_all, segment_indices)
+            
+        ell_all, k_all, segment_indices = self._pk_X_cache[cache_key]
         
         # Determine which X prediction method to use
         if 'a0' in diagram or 'a2' in diagram or 'a4' in diagram:
             pX_batched = self.PX_ell_extra(k_all, params, ell_all, diagram, de_model=de_model)
         else:
             pX_batched = self.PX_ell(k_all, params, ell_all, diagram, de_model=de_model)
-        
-        # Map inverse indices back to each segment
-        inverse_idx_offset = 0
-        segment_indices = []
-        for k_ell, _, _ in k_segments:
-            n_k = len(k_ell)
-            segment_indices.append(inverse_indices[inverse_idx_offset:inverse_idx_offset + n_k])
-            inverse_idx_offset += n_k
         
         # Extract predictions for each observable
         preds = []
@@ -196,30 +214,39 @@ class COMET(comet, BaseModel):
         return preds
     
     def predict_bispectrum_scoccimarro_multipoles(self, observables, params, de_model):
-        ell_all = list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)])) 
-        
-        # Collect all triangles and track which observable/ell they belong to
-        tri_segments = []  # List of (tri_array, obs_idx, ell_idx)
-        for obs_idx, obs in enumerate(observables):
-            tri = obs.tri if obs.triwin is None else obs.triwin
-            ell = obs.ell if obs.ellwin is None else obs.ellwin
-            for ell_idx, tri_ell in enumerate(tri):
-                tri_segments.append((tri_ell, obs_idx, ell_idx))
-        
-        # Get unique triangles and inverse indices
-        tri_all_concat = np.concatenate([tri_seg[0] for tri_seg in tri_segments])
-        tri_all, inverse_indices = np.unique(tri_all_concat, axis=0, return_inverse=True)
+        cache_key = tuple(id(obs) for obs in observables)
+        if not hasattr(self, '_bk_scocc_cache'):
+            self._bk_scocc_cache = {}
+            
+        if cache_key not in self._bk_scocc_cache:
+            ell_all = list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)])) 
+            
+            # Collect all triangles and track which observable/ell they belong to
+            tri_segments = []  # List of (tri_array, obs_idx, ell_idx)
+            for obs_idx, obs in enumerate(observables):
+                tri = obs.tri if obs.triwin is None else obs.triwin
+                ell = obs.ell if obs.ellwin is None else obs.ellwin
+                for ell_idx, tri_ell in enumerate(tri):
+                    tri_segments.append((tri_ell, obs_idx, ell_idx))
+            
+            # Get unique triangles and inverse indices
+            tri_all_concat = np.concatenate([tri_seg[0] for tri_seg in tri_segments])
+            tri_all, inverse_indices = np.unique(tri_all_concat, axis=0, return_inverse=True)
+            
+            # Map inverse indices back to each segment
+            inverse_idx_offset = 0
+            segment_indices = []
+            for tri_ell, _, _ in tri_segments:
+                n_tri = len(tri_ell)
+                segment_indices.append(inverse_indices[inverse_idx_offset:inverse_idx_offset + n_tri])
+                inverse_idx_offset += n_tri
+                
+            self._bk_scocc_cache[cache_key] = (ell_all, tri_all, segment_indices)
+            
+        ell_all, tri_all, segment_indices = self._bk_scocc_cache[cache_key]
         
         # Evaluate model only at unique triangles
         bell_batched = self.Bell_scoccimarro(tri_all, params, ell_all, de_model=de_model)
-        
-        # Map inverse indices back to each segment
-        inverse_idx_offset = 0
-        segment_indices = []
-        for tri_ell, _, _ in tri_segments:
-            n_tri = len(tri_ell)
-            segment_indices.append(inverse_indices[inverse_idx_offset:inverse_idx_offset + n_tri])
-            inverse_idx_offset += n_tri
         
         # Extract predictions for each observable
         preds = []
@@ -247,30 +274,39 @@ class COMET(comet, BaseModel):
         return preds
 
     def predict_bispectrum_sugiyama_multipoles(self, observables, params, de_model):
-        ell_all = list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)])) 
-        
-        # Collect all pairs and track which observable/ell they belong to
-        pair_segments = []  # List of (pair_array, obs_idx, ell_idx)
-        for obs_idx, obs in enumerate(observables):
-            pair = obs.pair if obs.xwin is None else obs.pairwin
-            ell = obs.ell if obs.ellwin is None else obs.ellwin
-            for ell_idx, pair_ell in enumerate(pair):
-                pair_segments.append((pair_ell, obs_idx, ell_idx))
-        
-        # Get unique pairs and inverse indices
-        pair_all_concat = np.concatenate([pair_seg[0] for pair_seg in pair_segments])
-        pair_all, inverse_indices = np.unique(pair_all_concat, axis=0, return_inverse=True)
+        cache_key = tuple(id(obs) for obs in observables)
+        if not hasattr(self, '_bk_sugi_cache'):
+            self._bk_sugi_cache = {}
+            
+        if cache_key not in self._bk_sugi_cache:
+            ell_all = list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)])) 
+            
+            # Collect all pairs and track which observable/ell they belong to
+            pair_segments = []  # List of (pair_array, obs_idx, ell_idx)
+            for obs_idx, obs in enumerate(observables):
+                pair = obs.pair if obs.xwin is None else obs.pairwin
+                ell = obs.ell if obs.ellwin is None else obs.ellwin
+                for ell_idx, pair_ell in enumerate(pair):
+                    pair_segments.append((pair_ell, obs_idx, ell_idx))
+            
+            # Get unique pairs and inverse indices
+            pair_all_concat = np.concatenate([pair_seg[0] for pair_seg in pair_segments])
+            pair_all, inverse_indices = np.unique(pair_all_concat, axis=0, return_inverse=True)
+            
+            # Map inverse indices back to each segment
+            inverse_idx_offset = 0
+            segment_indices = []
+            for pair_ell, _, _ in pair_segments:
+                n_pair = len(pair_ell)
+                segment_indices.append(inverse_indices[inverse_idx_offset:inverse_idx_offset + n_pair])
+                inverse_idx_offset += n_pair
+                
+            self._bk_sugi_cache[cache_key] = (ell_all, pair_all, segment_indices)
+            
+        ell_all, pair_all, segment_indices = self._bk_sugi_cache[cache_key]
         
         # Evaluate model only at unique pairs
         bell_batched = self.Bell_sugiyama(pair_all, params, ell_all, de_model=de_model)
-        
-        # Map inverse indices back to each segment
-        inverse_idx_offset = 0
-        segment_indices = []
-        for pair_ell, _, _ in pair_segments:
-            n_pair = len(pair_ell)
-            segment_indices.append(inverse_indices[inverse_idx_offset:inverse_idx_offset + n_pair])
-            inverse_idx_offset += n_pair
         
         # Extract predictions for each observable
         preds = []
@@ -298,41 +334,50 @@ class COMET(comet, BaseModel):
         return preds
 
     def predict_bispectrum_X_multipoles(self, observables, params, diagram, de_model):
-        ell_all = list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)])) 
-        is_scoccimarro = hasattr(observables[0], 'tri')
-        
-        # Collect coordinate segments (tri or pair)
-        coord_segments = []
-        if is_scoccimarro:
-            for obs_idx, obs in enumerate(observables):
-                tri = obs.tri if obs.xwin is None else obs.triwin
-                ell = obs.ell if obs.ellwin is None else obs.ellwin
-                for ell_idx, tri_ell in enumerate(tri):
-                    coord_segments.append((tri_ell, obs_idx, ell_idx, True))  # True = scoccimarro
-        else:
-            for obs_idx, obs in enumerate(observables):
-                pair = obs.pair if obs.xwin is None else obs.pairwin
-                ell = obs.ell if obs.ellwin is None else obs.ellwin
-                for ell_idx, pair_ell in enumerate(pair):
-                    coord_segments.append((pair_ell, obs_idx, ell_idx, False))  # False = sugiyama
-        
-        # Get unique coordinates and inverse indices
-        coord_all_concat = np.concatenate([seg[0] for seg in coord_segments])
-        coord_all, inverse_indices = np.unique(coord_all_concat, axis=0, return_inverse=True)
+        cache_key = tuple(id(obs) for obs in observables)
+        if not hasattr(self, '_bk_X_cache'):
+            self._bk_X_cache = {}
+            
+        if cache_key not in self._bk_X_cache:
+            ell_all = list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)])) 
+            is_scoccimarro = hasattr(observables[0], 'tri')
+            
+            # Collect coordinate segments (tri or pair)
+            coord_segments = []
+            if is_scoccimarro:
+                for obs_idx, obs in enumerate(observables):
+                    tri = obs.tri if obs.xwin is None else obs.triwin
+                    ell = obs.ell if obs.ellwin is None else obs.ellwin
+                    for ell_idx, tri_ell in enumerate(tri):
+                        coord_segments.append((tri_ell, obs_idx, ell_idx, True))  # True = scoccimarro
+            else:
+                for obs_idx, obs in enumerate(observables):
+                    pair = obs.pair if obs.xwin is None else obs.pairwin
+                    ell = obs.ell if obs.ellwin is None else obs.ellwin
+                    for ell_idx, pair_ell in enumerate(pair):
+                        coord_segments.append((pair_ell, obs_idx, ell_idx, False))  # False = sugiyama
+            
+            # Get unique coordinates and inverse indices
+            coord_all_concat = np.concatenate([seg[0] for seg in coord_segments])
+            coord_all, inverse_indices = np.unique(coord_all_concat, axis=0, return_inverse=True)
+            
+            # Map inverse indices back to each segment
+            inverse_idx_offset = 0
+            segment_indices = []
+            for coord_ell, _, _, _ in coord_segments:
+                n_coord = len(coord_ell)
+                segment_indices.append(inverse_indices[inverse_idx_offset:inverse_idx_offset + n_coord])
+                inverse_idx_offset += n_coord
+                
+            self._bk_X_cache[cache_key] = (ell_all, is_scoccimarro, coord_all, segment_indices)
+            
+        ell_all, is_scoccimarro, coord_all, segment_indices = self._bk_X_cache[cache_key]
         
         # Evaluate model only at unique coordinates
         if is_scoccimarro:
             bX_batched = self.BX_ell_scoccimarro(coord_all, params, ell_all, diagram, de_model=de_model)
         else:
             bX_batched = self.BX_ell_sugiyama(coord_all, params, ell_all, diagram, de_model=de_model)
-        
-        # Map inverse indices back to each segment
-        inverse_idx_offset = 0
-        segment_indices = []
-        for coord_ell, _, _, _ in coord_segments:
-            n_coord = len(coord_ell)
-            segment_indices.append(inverse_indices[inverse_idx_offset:inverse_idx_offset + n_coord])
-            inverse_idx_offset += n_coord
         
         # Extract predictions for each observable
         preds = []
