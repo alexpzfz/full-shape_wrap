@@ -3,7 +3,7 @@ import numpy as np
 class Observable:
     """Base class for observables"""
     def __init__(self, x, y, cov=None, nbar=None, cosmo_fid=None, wmat=None, xwin=None,
-                 xmin=None, xmax=None, xwinmin=None, xwinmax=None, nmocks_cov=None):
+                 xmin=None, xmax=None, xwinmin=None, xwinmax=None, nobswin=None, nmocks_cov=None):
         self.x = x.copy()
         self.y = y.copy()
         if not isinstance(self.y, list):
@@ -18,15 +18,17 @@ class Observable:
         self.nmocks_cov = nmocks_cov
         self.wmat = wmat
         self.xwin = xwin
-        self.nobswin = None
+        self.nobswin = nobswin
         if wmat is not None:
             assert self.xwin is not None, "xwin must be provided if wmat is provided"
-            if isinstance(self.xwin, float):
-                self.nobswin = self.n_obs
+            if not isinstance(self.xwin, list):
+                if self.nobswin is None:
+                    self.nobswin = self.n_obs
                 self.xwin = [self.xwin] * self.nobswin
             else:
-                self.nobswin = len(self.xwin)
-            assert self.wmat.shape == (self.n_data, np.sum([len(xwini) for xwini in self.xwin])), "wmat has wrong shape"
+                if self.nobswin is None:
+                    self.nobswin = len(self.xwin)
+            assert self.wmat.shape == (self.n_data, np.sum([len(xwini) for xwini in self.xwin])), f"wmat shape {self.wmat.shape} does not match expected shape {(self.n_data, np.sum([len(xwini) for xwini in self.xwin]))}"
 
         if xmin is not None or xmax is not None:
             self._cut_scales(xmin, xmax, xwinmin, xwinmax)
@@ -88,7 +90,7 @@ class PowerSpectrumMultipoles(Observable):
     def __init__(self, k, Pell, ell=None, cov=None, nbar=None, cosmo_fid=None, input_Mpc_units=False, save_Mpc_units=True, kmin=None, kmax=None,
                  wmat=None, kwin=None, ellwin=None, kwinmin=None, kwinmax=None, nmocks_cov=None):
         super().__init__(k, Pell, cov, nbar, cosmo_fid, xmin=kmin, xmax=kmax, nmocks_cov=nmocks_cov,
-                         wmat=wmat, xwin=kwin, xwinmin=kwinmin, xwinmax=kwinmax)
+                         wmat=wmat, xwin=kwin, xwinmin=kwinmin, xwinmax=kwinmax, nobswin=len(ellwin) if ellwin is not None else None)
 
         if not input_Mpc_units and save_Mpc_units:
             assert getattr(self, 'h_fid') is not None, "h value is required to convert to Mpc units"
@@ -178,7 +180,7 @@ class BispectrumSugiyamaMultipoles(Observable):
     def __init__(self, pair, Bell, ell=None, cov=None, nbar=None, cosmo_fid=None, Mpc_units=False, kmin=None, kmax=None,
                  wmat=None, pairwin=None, ellwin=None, kwinmin=None, kwinmax=None, nmocks_cov=None):
         super().__init__(pair, Bell, cov, nbar, cosmo_fid, xmin=kmin, xmax=kmax, wmat=wmat, xwin=pairwin, 
-                         xwinmin=kwinmin, xwinmax=kwinmax, nmocks_cov=nmocks_cov)
+                         xwinmin=kwinmin, xwinmax=kwinmax, nmocks_cov=nmocks_cov, nobswin=len(ellwin) if ellwin is not None else None)
         if not Mpc_units:
             assert getattr(self, 'h_fid') is not None, "h value is required to convert to Mpc units"
             self.x = [xi * self.h_fid for xi in self.x]
