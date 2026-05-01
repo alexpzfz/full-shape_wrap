@@ -33,9 +33,19 @@ def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, use_pdw_interp=False
 
         if is_batched:
             nz = len(comet_params['z'])
-            pdw1 = pdw_all[:n1, :].reshape(*k1_p.shape, nz)
-            pdw2 = pdw_all[n1:n1+n2, :].reshape(*k2_p.shape, nz)
-            pdw3 = pdw_all[n1+n2:, :].reshape(*k3_p.shape, nz)
+            has_z_axis = (k1_p.shape[-1] == nz)
+            if has_z_axis:
+                p1 = pdw_all[:n1, :]
+                pdw1 = p1[np.arange(n1), np.arange(n1) % nz].reshape(k1_p.shape)
+                p2 = pdw_all[n1:n1+n2, :]
+                pdw2 = p2[np.arange(n2), np.arange(n2) % nz].reshape(k2_p.shape)
+                p3 = pdw_all[n1+n2:, :]
+                n3 = k3_p.size
+                pdw3 = p3[np.arange(n3), np.arange(n3) % nz].reshape(k3_p.shape)
+            else:
+                pdw1 = pdw_all[:n1, :].reshape(*k1_p.shape, nz)
+                pdw2 = pdw_all[n1:n1+n2, :].reshape(*k2_p.shape, nz)
+                pdw3 = pdw_all[n1+n2:, :].reshape(*k3_p.shape, nz)
         else:
             pdw1 = pdw_all[:n1].reshape(k1_p.shape)
             pdw2 = pdw_all[n1:n1+n2].reshape(k2_p.shape)
@@ -51,9 +61,15 @@ def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, use_pdw_interp=False
         if is_batched:
             #handle multiz case by interpolating each redshift separately and stacking the results
             pdw_interp_list = [interp1d(kgrid, pdw_grid[:, j], axis=0, kind='cubic') for j in range(pdw_grid.shape[1])]
-            pdw1 = np.stack([pdw_interp_list[j](k1_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
-            pdw2 = np.stack([pdw_interp_list[j](k2_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
-            pdw3 = np.stack([pdw_interp_list[j](k3_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
+            has_z_axis = (k1_p.shape[-1] == len(comet_params['z']))
+            if has_z_axis:
+                pdw1 = np.stack([pdw_interp_list[j](k1_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
+                pdw2 = np.stack([pdw_interp_list[j](k2_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
+                pdw3 = np.stack([pdw_interp_list[j](k3_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
+            else:
+                pdw1 = np.stack([pdw_interp_list[j](k1_p) for j in range(pdw_grid.shape[1])], axis=-1)
+                pdw2 = np.stack([pdw_interp_list[j](k2_p) for j in range(pdw_grid.shape[1])], axis=-1)
+                pdw3 = np.stack([pdw_interp_list[j](k3_p) for j in range(pdw_grid.shape[1])], axis=-1)
         else:
             pdw_interp = interp1d(kgrid, pdw_grid, axis=0, kind='cubic')
             pdw1 = pdw_interp(k1_p)
@@ -468,9 +484,19 @@ def bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, use_pdw_interp=False
 
         if is_batched:
             nz = len(comet_params['z'])
-            pdw1 = pdw_all[:n1, :].reshape(*k1_p.shape, nz)
-            pdw2 = pdw_all[n1:n1+n2, :].reshape(*k2_p.shape, nz)
-            pdw3 = pdw_all[n1+n2:, :].reshape(*k3_p.shape, nz)
+            has_z_axis = (k1_p.shape[-1] == nz)
+            if has_z_axis:
+                p1 = pdw_all[:n1, :]
+                pdw1 = p1[np.arange(n1), np.arange(n1) % nz].reshape(k1_p.shape)
+                p2 = pdw_all[n1:n1+n2, :]
+                pdw2 = p2[np.arange(n2), np.arange(n2) % nz].reshape(k2_p.shape)
+                p3 = pdw_all[n1+n2:, :]
+                n3 = k3_p.size
+                pdw3 = p3[np.arange(n3), np.arange(n3) % nz].reshape(k3_p.shape)
+            else:
+                pdw1 = pdw_all[:n1, :].reshape(*k1_p.shape, nz)
+                pdw2 = pdw_all[n1:n1+n2, :].reshape(*k2_p.shape, nz)
+                pdw3 = pdw_all[n1+n2:, :].reshape(*k3_p.shape, nz)
         else:
             pdw1 = pdw_all[:n1].reshape(k1_p.shape)
             pdw2 = pdw_all[n1:n1+n2].reshape(k2_p.shape)
@@ -485,9 +511,15 @@ def bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, use_pdw_interp=False
 
         if is_batched:
             pdw_interp_list = [interp1d(kgrid, pdw_grid[:, j], axis=0, kind='cubic') for j in range(pdw_grid.shape[1])]
-            pdw1 = np.stack([pdw_interp_list[j](k1_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
-            pdw2 = np.stack([pdw_interp_list[j](k2_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
-            pdw3 = np.stack([pdw_interp_list[j](k3_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
+            has_z_axis = (k1_p.shape[-1] == len(comet_params['z']))
+            if has_z_axis:
+                pdw1 = np.stack([pdw_interp_list[j](k1_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
+                pdw2 = np.stack([pdw_interp_list[j](k2_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
+                pdw3 = np.stack([pdw_interp_list[j](k3_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
+            else:
+                pdw1 = np.stack([pdw_interp_list[j](k1_p) for j in range(pdw_grid.shape[1])], axis=-1)
+                pdw2 = np.stack([pdw_interp_list[j](k2_p) for j in range(pdw_grid.shape[1])], axis=-1)
+                pdw3 = np.stack([pdw_interp_list[j](k3_p) for j in range(pdw_grid.shape[1])], axis=-1)
         else:
             pdw_interp = interp1d(kgrid, pdw_grid, axis=0, kind='cubic')
             pdw1 = pdw_interp(k1_p)
