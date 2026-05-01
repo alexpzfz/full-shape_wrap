@@ -126,30 +126,46 @@ class Likelihood:
             # self.am_det_cov = np.prod([self.params.parameters[am_param].prior[1]**2 for am_param in self.am_params])
         self.covs = [obs.cov.copy() for obs in self.observables]
         self.nmocks_covs = [obs.nmocks_cov for obs in self.observables]
-        self._rescale_covariance(mode='Percival')
+        self._rescale_covariance()
         # self.icov = np.linalg.inv(self.cov)
         self.lcovs = [np.linalg.cholesky(obs.cov) for obs in self.observables]
     
- 
-    def _rescale_covariance(self, mode='Percival'):
+    
+    def _get_hartlap2007_factor(self, n_data, n_mocks):
+        # to rescale the precission matrix
+        return (n_mocks - n_data - 2) / (n_mocks - 1)
+    
+    def _get_percival2022_factor(self, n_data, n_mocks, n_params):
+        # to rescale the covariance matrix
+        b = (n_mocks - n_data - 2) / ((n_mocks - n_data - 1) * (n_mocks - n_data - 4))
+        return ((n_mocks - 1) * (1 + b * (n_data - n_params))) / (n_mocks - n_data + n_params - 1)
+
+    def _get_percival2014_factor(self, n_data, n_mocks, n_params):
+        a = 2 / ((n_mocks - n_data - 1) * (n_mocks - n_data - 4))
+        b = (n_mocks - n_data - 2) / ((n_mocks - n_data - 1) * (n_mocks - n_data - 4))
+        return (1 + b * (n_data - n_params)) / (1 + a + b * (n_params + 1))
+    
+    def _rescale_covariance(self, mode='Hartlap2007+Percival2014'):
         for i, obs in enumerate(self.observables):
             n_data = obs.n_data
             n_mocks = self.nmocks_covs[i]
             n_params = self.params.n_free_params
 
             if n_mocks is not None:
-                hartlap_factor = (n_mocks - n_data - 2) / (n_mocks - 1)
-
-                b = (n_mocks - n_data - 2) / ((n_mocks - n_data - 1) * (n_mocks - n_data - 4))
-                percival_factor = (n_mocks - n_data + n_params - 1) / ((n_mocks - 1) * (1 + b * (n_data - n_params)))
+                h2007_factor = self._get_hartlap2007_factor(n_data, n_mocks)
+                p2022_factor = self._get_percival2022_factor(n_data, n_mocks, n_params)
+                p2014_factor = self._get_percival2014_factor(n_data, n_mocks, n_params)
                 print('Rescaling covariance for observable {} with n_data={}, n_mocks={}, n_params={}'.format(i, n_data, n_mocks, n_params))
-                print('Hartlap factor: {:.3f}, Percival factor: {:.3f}'.format(hartlap_factor, percival_factor))
-                if mode == 'Hartlap':
-                    factor = hartlap_factor
-                elif mode == 'Percival':
-                    factor = percival_factor
-                else:
-                    raise ValueError("Invalid mode for covariance rescaling. Choose 'Hartlap' or 'Percival'.")
+                print(f'Hartlap2007 factor: {h2007_factor:.3f} (1/{1/h2007_factor:.3f}), Percival2022 factor: {p2022_factor:.3f} (1/{1/p2022_factor:.3f}), Percival2014 factor: {p2014_factor:.3f} (1/{1/p2014_factor:.3f})')
+                print('Using: {}'.format(mode))
+                factor = 1.
+                if 'Hartlap2007' in mode:
+                    factor *= h2007_factor
+                elif 'Percival2022' in mode:
+                    factor /= p2022_factor 
+                if 'Percival2014' in mode:
+                    factor /= p2014_factor
+                print(f'Total rescaling factor for cov (precision): {1/factor:.3f} ({factor:.3f})')
                 self.covs[i] *= 1/factor
         #self.icov *= factor
 
