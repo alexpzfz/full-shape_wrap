@@ -21,29 +21,27 @@ def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, use_pdw_interp=False
     k2_p, mu2_p = apply_ap(k2, mu2, qpar, qperp)
     k3_p, mu3_p = apply_ap(k3, mu3, qpar, qperp)
     # k1, k2, k3 are either arrays of any shape or floats
-    k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
 
     if not use_pdw_interp:
-        kunique, kinverse = np.unique(k_all, return_inverse=True)
-        pdw = emu.Pdw(kunique, comet_params, mu=0.6, **kwargs)
-
+        # Avoid np.unique() sort overhead (O(N log N)), but process as a single 
+        # concatenated block to avoid triple fixed-function-call overhead in Pdw.
+        k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
+        pdw_all = emu.Pdw(k_all, comet_params, mu=0.6, **kwargs)
+        
         n1, n2 = k1_p.size, k2_p.size
-        idx1 = kinverse[:n1].reshape(k1_p.shape)
-        idx2 = kinverse[n1:n1+n2].reshape(k2_p.shape)
-        idx3 = kinverse[n1+n2:].reshape(k3_p.shape)
-
         is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
+
         if is_batched:
             nz = len(comet_params['z'])
-            batch_idx = np.arange(nz)
-            pdw1 = pdw[idx1, batch_idx]
-            pdw2 = pdw[idx2, batch_idx]
-            pdw3 = pdw[idx3, batch_idx]
+            pdw1 = pdw_all[:n1, :].reshape(*k1_p.shape, nz)
+            pdw2 = pdw_all[n1:n1+n2, :].reshape(*k2_p.shape, nz)
+            pdw3 = pdw_all[n1+n2:, :].reshape(*k3_p.shape, nz)
         else:
-            pdw1 = pdw[idx1]
-            pdw2 = pdw[idx2]
-            pdw3 = pdw[idx3]
+            pdw1 = pdw_all[:n1].reshape(k1_p.shape)
+            pdw2 = pdw_all[n1:n1+n2].reshape(k2_p.shape)
+            pdw3 = pdw_all[n1+n2:].reshape(k3_p.shape)
     else:
+        k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
         kmin, kmax = np.min(k_all), np.max(k_all)
         kgrid = np.logspace(np.log10(kmin*0.9), np.log10(kmax*1.1), 1000)
         pdw_grid = emu.Pdw(kgrid, comet_params, mu=0.6, **kwargs)
@@ -62,39 +60,68 @@ def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, use_pdw_interp=False
             pdw2 = pdw_interp(k2_p)
             pdw3 = pdw_interp(k3_p)
 
-    # tree level first
-    btree = tree_term(k1_p, k2_p, mu1_p, mu2_p, k3_p, mu3_p, b1, b2, g2, f) * pdw1 * pdw2 + \
-            tree_term(k2_p, k3_p, mu2_p, mu3_p, k1_p, mu1_p, b1, b2, g2, f) * pdw2 * pdw3 + \
-            tree_term(k3_p, k1_p, mu3_p, mu1_p, k2_p, mu2_p, b1, b2, g2, f) * pdw3 * pdw1
+    # tree level first. Precompute shared algebra and use in-place operators
+    mu1_sq, mu2_sq, mu3_sq = mu1_p**2, mu2_p**2, mu3_p**2
+    Z1_1 = kernel_Z1(mu1_p, b1, f, mu_sq=mu1_sq)
+    Z1_2 = kernel_Z1(mu2_p, b1, f, mu_sq=mu2_sq)
+    Z1_3 = kernel_Z1(mu3_p, b1, f, mu_sq=mu3_sq)
+
+    btree = tree_term(k1_p, k2_p, mu1_p, mu2_p, k3_p, mu3_p, b1, b2, g2, f, Z1_1, Z1_2) 
+    btree = btree * pdw1
+    btree = btree * pdw2
+    
+    t2 = tree_term(k2_p, k3_p, mu2_p, mu3_p, k1_p, mu1_p, b1, b2, g2, f, Z1_2, Z1_3)
+    t2 = t2 * pdw2
+    t2 = t2 * pdw3
+    btree = btree + t2
+
+    t3 = tree_term(k3_p, k1_p, mu3_p, mu1_p, k2_p, mu2_p, b1, b2, g2, f, Z1_3, Z1_1)
+    t3 = t3 * pdw3
+    t3 = t3 * pdw1
+    btree = btree + t3
     
     # now the stochastic part
     NB0, MB0, NP0 = params['NB0'], params['MB0'], params['NP0']
     avir, sv = params['avir'], params['sv']
 
-    bstoch = stoch_term(k1_p, mu1_p, b1, f, avir, sv, MB0, NP0) * pdw1 + \
-             stoch_term(k2_p, mu2_p, b1, f, avir, sv, MB0, NP0) * pdw2 + \
-             stoch_term(k3_p, mu3_p, b1, f, avir, sv, MB0, NP0) * pdw3
-    bstoch = bstoch * 1/nbar
-    bstoch = bstoch + NB0/nbar**2
+    kxmu1_sq = (k1_p**2) * mu1_sq
+    kxmu2_sq = (k2_p**2) * mu2_sq
+    kxmu3_sq = (k3_p**2) * mu3_sq
+
+    bstoch = stoch_term(kxmu1_sq, mu1_sq, b1, f, avir, sv, MB0, NP0, Z1_1) 
+    bstoch = bstoch * pdw1
+    
+    s2 = stoch_term(kxmu2_sq, mu2_sq, b1, f, avir, sv, MB0, NP0, Z1_2)
+    s2 = s2 * pdw2
+    bstoch = bstoch + s2
+
+    s3 = stoch_term(kxmu3_sq, mu3_sq, b1, f, avir, sv, MB0, NP0, Z1_3)
+    s3 = s3 * pdw3
+    bstoch = bstoch + s3
+
+    bstoch = bstoch * (1.0 / nbar)
+    bstoch = bstoch + (NB0/nbar**2)
 
     #construct vdg bispectrum
-    lambda2 = -0.5 * f**2 * (k1_p**2 * mu1_p**2 + k2_p**2 * mu2_p**2 + k3_p**2 * mu3_p**2)
+    lambda2 = -0.5 * f**2 * (kxmu1_sq + kxmu2_sq + kxmu3_sq)
     winfty = w_B_infty(lambda2, avir, sv)
-    bvdg = winfty * btree + bstoch
-    bvdg = bvdg / qiso6
-    return bvdg
+    btree = btree * winfty
+    btree = btree + bstoch
+    btree = btree / qiso6
+    return btree
 
 
 
-def tree_term(ki, kj, mui, muj, kk, muk, b1, b2, g2, f):
+def tree_term(ki, kj, mui, muj, kk, muk, b1, b2, g2, f, Z1_i, Z1_j):
     muij = get_dot_cosine(ki, kj, kk)
-    t = 2 * kernel_Z1(mui, b1, f) * kernel_Z1(muj, b1, f)
-    t = t * kernel_Z2(ki, kj, mui, muj, muij, kk, -muk, b1, b2, g2, f)
+    t = (2.0 * Z1_i) * Z1_j
+    # Use normal assignment here since t may be smaller broadcast shape than kernel_Z2
+    t = t * kernel_Z2(ki, kj, mui, muj, muij, kk, -muk, b1, b2, g2, f, Z1_i, Z1_j)
     return t
 
-def stoch_term(ki, mui, b1, f, avir, sv, MB0, NP0):
-    t = (b1 * MB0 + f * mui**2 * NP0) * kernel_Z1(mui, b1, f)
-    lambda2 = -f**2 * ki**2 * mui**2
+def stoch_term(kxmu_sq, mui_sq, b1, f, avir, sv, MB0, NP0, Z1_i):
+    t = (b1 * MB0 + (f * NP0) * mui_sq) * Z1_i
+    lambda2 = -f**2 * kxmu_sq
     t = t * w_B_infty(lambda2, avir, sv)
     return t
 
@@ -430,25 +457,26 @@ def bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, use_pdw_interp=False
     k2_p, mu2_p = apply_ap(k2, mu2, qpar, qperp)
     k3_p, mu3_p = apply_ap(k3, mu3, qpar, qperp)
     # k1, k2, k3 are either arrays of any shape or floats
-    k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
 
     if not use_pdw_interp:
-        kunique = np.unique(k_all)
-        pdw = emu.Pdw(kunique, comet_params, mu=0.6, **kwargs)
+        # Evaluate directly on a single concatenated block to reduce func call overhead.
+        k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
+        pdw_all = emu.Pdw(k_all, comet_params, mu=0.6, **kwargs)
         
+        n1, n2 = k1_p.size, k2_p.size
         is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
 
         if is_batched:
             nz = len(comet_params['z'])
-            batch_idx = np.arange(nz)
-            pdw1 = pdw[np.searchsorted(kunique, k1_p), batch_idx]
-            pdw2 = pdw[np.searchsorted(kunique, k2_p), batch_idx]
-            pdw3 = pdw[np.searchsorted(kunique, k3_p), batch_idx]
+            pdw1 = pdw_all[:n1, :].reshape(*k1_p.shape, nz)
+            pdw2 = pdw_all[n1:n1+n2, :].reshape(*k2_p.shape, nz)
+            pdw3 = pdw_all[n1+n2:, :].reshape(*k3_p.shape, nz)
         else:
-            pdw1 = pdw[np.searchsorted(kunique, k1_p)]
-            pdw2 = pdw[np.searchsorted(kunique, k2_p)]
-            pdw3 = pdw[np.searchsorted(kunique, k3_p)]
+            pdw1 = pdw_all[:n1].reshape(k1_p.shape)
+            pdw2 = pdw_all[n1:n1+n2].reshape(k2_p.shape)
+            pdw3 = pdw_all[n1+n2:].reshape(k3_p.shape)
     else:
+        k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
         kmin, kmax = np.min(k_all), np.max(k_all)
         kgrid = np.logspace(np.log10(kmin*0.9), np.log10(kmax*1.1), 1000)
         pdw_grid = emu.Pdw(kgrid, comet_params, mu=0.6, **kwargs)
@@ -466,10 +494,28 @@ def bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, use_pdw_interp=False
             pdw2 = pdw_interp(k2_p)
             pdw3 = pdw_interp(k3_p)
 
-    bstoch = stoch_term(k1_p, mu1_p, b1, f, avir, sv, MB0, NP0) * pdw1 + \
-             stoch_term(k2_p, mu2_p, b1, f, avir, sv, MB0, NP0) * pdw2 + \
-             stoch_term(k3_p, mu3_p, b1, f, avir, sv, MB0, NP0) * pdw3
-    bstoch = bstoch * 1/nbar
+    # Cache squares
+    mu1_sq, mu2_sq, mu3_sq = mu1_p**2, mu2_p**2, mu3_p**2
+    Z1_1 = kernel_Z1(mu1_p, b1, f, mu_sq=mu1_sq)
+    Z1_2 = kernel_Z1(mu2_p, b1, f, mu_sq=mu2_sq)
+    Z1_3 = kernel_Z1(mu3_p, b1, f, mu_sq=mu3_sq)
+
+    kxmu1_sq = (k1_p**2) * mu1_sq
+    kxmu2_sq = (k2_p**2) * mu2_sq
+    kxmu3_sq = (k3_p**2) * mu3_sq
+
+    bstoch = stoch_term(kxmu1_sq, mu1_sq, b1, f, avir, sv, MB0, NP0, Z1_1)
+    bstoch = bstoch * pdw1
+    
+    s2 = stoch_term(kxmu2_sq, mu2_sq, b1, f, avir, sv, MB0, NP0, Z1_2)
+    s2 = s2 * pdw2
+    bstoch = bstoch + s2
+    
+    s3 = stoch_term(kxmu3_sq, mu3_sq, b1, f, avir, sv, MB0, NP0, Z1_3)
+    s3 = s3 * pdw3
+    bstoch = bstoch + s3
+
+    bstoch = bstoch * (1.0 / nbar)
     bstoch = bstoch / qiso6
     return bstoch
 
@@ -590,8 +636,10 @@ def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, use_pdw_interp=Fals
     return res
 
 
-def kernel_Z1(mu, b1, f):
-    return b1 + f * mu**2
+def kernel_Z1(mu, b1, f, mu_sq=None):
+    if mu_sq is None:
+        mu_sq = mu**2
+    return b1 + f * mu_sq
 
 def get_dot_cosine(k1, k2, k3):
     """Calculate (k1 . k2) / (|k1| |k2|) using the triangle condition"""
@@ -609,13 +657,17 @@ def kernel_K(mu12):
 def kernel_K2(k1, k2, mu12, b1, b2, g2):
     return b1 * kernel_F2(k1, k2, mu12) + b2/2. + g2 * kernel_K(mu12)
 
-def kernel_Z2(k1, k2, mu1, mu2, mu12, k, mu, b1, b2, g2, f):
+def kernel_Z2(k1, k2, mu1, mu2, mu12, k, mu, b1, b2, g2, f, Z1_1=None, Z1_2=None):
     # k = k3 = k1^2 + k2^2 - 2 k1 k2 mu12
     # mu = (k1 mu1 + k2 mu2) / k = -mu3
+    if Z1_1 is None:
+        Z1_1 = kernel_Z1(mu1, b1, f)
+    if Z1_2 is None:
+        Z1_2 = kernel_Z1(mu2, b1, f)
+        
     return kernel_K2(k1, k2, mu12, b1, b2, g2) + \
            f * mu**2 * kernel_G2(k1, k2, mu12) + \
-           0.5 * f * k * mu * (mu1/k1 * kernel_Z1(mu2, b1, f) \
-                                + mu2/k2 * kernel_Z1(mu1, b1, f))
+           0.5 * f * k * mu * ((mu1/k1) * Z1_2 + (mu2/k2) * Z1_1)
 
 def w_B_infty(lamb2, avir, sv):
     return 1./(1 - lamb2 * avir**2)**(3./2.) * \
