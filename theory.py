@@ -3,6 +3,7 @@ import numpy as np
 from observables import PowerSpectrumMultipoles, BispectrumScoccimarroMultipoles, BispectrumSugiyamaMultipoles, JointObservable
 from bispectrum import bispectrum_scoccimarro_proj, bispectrum_sugiyama_proj, bX_5d, bX_ell_scoccimarro, bX_ell_sugiyama
 from scipy.special import eval_legendre
+from scipy.interpolate import UnivariateSpline, make_interp_spline
 
 class BaseModel:
     """Base class for models"""
@@ -93,6 +94,7 @@ class COMET(comet, BaseModel):
         self._extra_diagrams_to_marg = {'a0': 'Pctr_a0', 'a2': 'Pctr_a2', 'a4': 'Pctr_a4'}
         self.bispec_kwargs = {'soccimarro': {'nmu': 5, 'nphi': 5}, 
                               'sugiyama': {'nmu1': 5, 'nmu12': 12, 'nphi': 5, 'mu12_transform': 'quadratic'}}
+        self.use_interp_kwin = False
 
     def predict_power_spectrum_multipoles(self, observables, params, de_model):
         cache_key = tuple(id(obs) for obs in observables)
@@ -125,9 +127,19 @@ class COMET(comet, BaseModel):
             self._pk_cache[cache_key] = (ell_all, k_all, segment_indices)
             
         ell_all, k_all, segment_indices = self._pk_cache[cache_key]
+
+        if (obs.kwin is not None for obs in observables) and self.use_interp_kwin:
+            k_eval = self.get_kvec_compression(min(k_all), max(k_all))
+            pell_eval = self.Pell(k_eval, params, ell_all, de_model=de_model)
+            pell_list = np.stack([pell_eval[f'ell{ll}'] for ll in ell_all], axis=1)
+            spline = make_interp_spline(k_eval, pell_list, axis=0)(k_all)
+            spline = spline.reshape((spline.shape[0] * spline.shape[1],)  + spline.shape[2:], order='F')
+            pell_batched = {f'ell{ll}': spline[:, i, ...] for i, ll in enumerate(ell_all)} 
+
         
         # Evaluate model only at unique k values
-        pell_batched = self.Pell(k_all, params, ell_all, de_model=de_model)
+        else:
+            pell_batched = self.Pell(k_all, params, ell_all, de_model=de_model)
         
         # Extract predictions for each observable
         preds = []
@@ -183,12 +195,29 @@ class COMET(comet, BaseModel):
             self._pk_X_cache[cache_key] = (ell_all, k_all, segment_indices)
             
         ell_all, k_all, segment_indices = self._pk_X_cache[cache_key]
-        
-        # Determine which X prediction method to use
+
+        px_ell_func = self.PX_ell
         if 'a0' in diagram or 'a2' in diagram or 'a4' in diagram:
-            pX_batched = self.PX_ell_extra(k_all, params, ell_all, diagram, de_model=de_model)
+            px_ell_func = self.PX_ell_extra
+
+        if (obs.kwin is not None for obs in observables) and self.use_interp_kwin:
+            k_eval = self.get_kvec_compression(min(k_all), max(k_all))
+            pX_eval = px_ell_func(k_eval, params, ell_all, de_model=de_model)
+            pX_list = np.stack([pX_eval[f'ell{ll}'] for ll in ell_all], axis=1)
+            spline = make_interp_spline(k_eval, pX_list, axis=0)(k_all)
+            spline = spline.reshape((spline.shape[0] * spline.shape[1],)  + spline.shape[2:], order='F')
+            pX_batched = {f'ell{ll}': spline[:, i, ...] for i, ll in enumerate(ell_all)} 
+
+        
+        # Evaluate model only at unique k values
         else:
-            pX_batched = self.PX_ell(k_all, params, ell_all, diagram, de_model=de_model)
+            pX_batched = self.px_ell_func(k_all, params, ell_all, de_model=de_model)
+         
+        # # Determine which X prediction method to use
+        # if 'a0' in diagram or 'a2' in diagram or 'a4' in diagram:
+        #     pX_batched = self.PX_ell_extra(k_all, params, ell_all, diagram, de_model=de_model)
+        # else:
+        #     pX_batched = self.PX_ell(k_all, params, ell_all, diagram, de_model=de_model)
         
         # Extract predictions for each observable
         preds = []
@@ -511,3 +540,24 @@ class COMET(comet, BaseModel):
             res[ll] = bX_sugi[ll][idx_inverse][idx_ell[i]:idx_ell[i+1]] if idx_inverse is not None else bX_sugi[ll]
         return res
         
+
+
+    def get_kvec_compression(self, kmin, kmax, nk=100):
+        def croot(x, p):
+            return np.sign(x) * np.abs(x)**(1.0 / p)
+
+        kcenter = 0.65
+        power = 1.5
+        qmin = np.log10(kmin)
+        qmax = np.log10(kmax)
+        qmin = croot(qmin + kcenter, power)
+        qmax = croot(qmax + kcenter, power)
+
+        kvec = np.zeros(nk, dtype=float)
+        for i in range(nk):
+            k = (qmax - qmin) * (i / (nk - 1)) + qmin
+            k = np.sign(k) * np.abs(k)**power - kcenter
+            kvec[i] = k
+
+        kvec = 10.0**kvec
+        return kvec
