@@ -22,31 +22,86 @@ def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, use_pdw_interp=False
     k3_p, mu3_p = apply_ap(k3, mu3, qpar, qperp)
     # k1, k2, k3 are either arrays of any shape or floats
 
-    if not use_pdw_interp:
-        # Avoid np.unique() sort overhead (O(N log N)), but process as a single 
-        # concatenated block to avoid triple fixed-function-call overhead in Pdw.
-        k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
-        pdw_all = emu.Pdw(k_all, comet_params, mu=0.6, **kwargs)
+    # if not use_pdw_interp:
+    #     # Avoid np.unique() sort overhead (O(N log N)), but process as a single 
+    #     # concatenated block to avoid triple fixed-function-call overhead in Pdw.
+    #     k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
+    #     pdw_all = emu.Pdw(k_all, comet_params, mu=0.6, **kwargs)
         
-        n1, n2 = k1_p.size, k2_p.size
+    #     n1, n2 = k1_p.size, k2_p.size
+    #     is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
+
+    #     if is_batched:
+    #         nz = len(comet_params['z'])
+    #         has_z_axis = (k1_p.shape[-1] == nz)
+    #         if has_z_axis:
+    #             p1 = pdw_all[:n1, :]
+    #             pdw1 = p1[np.arange(n1), np.arange(n1) % nz].reshape(k1_p.shape)
+    #             p2 = pdw_all[n1:n1+n2, :]
+    #             pdw2 = p2[np.arange(n2), np.arange(n2) % nz].reshape(k2_p.shape)
+    #             p3 = pdw_all[n1+n2:, :]
+    #             n3 = k3_p.size
+    #             pdw3 = p3[np.arange(n3), np.arange(n3) % nz].reshape(k3_p.shape)
+    #         else:
+    #             pdw1 = pdw_all[:n1, :].reshape(*k1_p.shape, nz)
+    #             pdw2 = pdw_all[n1:n1+n2, :].reshape(*k2_p.shape, nz)
+    #             pdw3 = pdw_all[n1+n2:, :].reshape(*k3_p.shape, nz)
+    #     else:
+    #         pdw1 = pdw_all[:n1].reshape(k1_p.shape)
+    #         pdw2 = pdw_all[n1:n1+n2].reshape(k2_p.shape)
+    #         pdw3 = pdw_all[n1+n2:].reshape(k3_p.shape)
+
+    if not use_pdw_interp:
         is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
 
         if is_batched:
             nz = len(comet_params['z'])
-            has_z_axis = (k1_p.shape[-1] == nz)
-            if has_z_axis:
-                p1 = pdw_all[:n1, :]
-                pdw1 = p1[np.arange(n1), np.arange(n1) % nz].reshape(k1_p.shape)
-                p2 = pdw_all[n1:n1+n2, :]
-                pdw2 = p2[np.arange(n2), np.arange(n2) % nz].reshape(k2_p.shape)
-                p3 = pdw_all[n1+n2:, :]
-                n3 = k3_p.size
-                pdw3 = p3[np.arange(n3), np.arange(n3) % nz].reshape(k3_p.shape)
-            else:
-                pdw1 = pdw_all[:n1, :].reshape(*k1_p.shape, nz)
-                pdw2 = pdw_all[n1:n1+n2, :].reshape(*k2_p.shape, nz)
-                pdw3 = pdw_all[n1+n2:, :].reshape(*k3_p.shape, nz)
+            
+            # Pre-allocate output arrays matching the batched shapes
+            pdw1 = np.empty_like(k1_p)
+            pdw2 = np.empty_like(k2_p)
+            pdw3 = np.empty_like(k3_p)
+
+            # for k, v in emu.params.items():
+            #     if isinstance(v, np.ndarray) and v.size > 1:
+            #         emu.params[k] = v.item(0)
+            
+            # Evaluate strictly per redshift slice to avoid O(N^2) Cartesian product
+            for i in range(nz):
+                # Extract coordinates for this redshift slice
+                k1_z = k1_p[..., i]
+                k2_z = k2_p[..., i]
+                k3_z = k3_p[..., i]
+                
+                # Concatenate just the k's for this slice
+                k_all_z = np.concatenate([np.ravel(k1_z), np.ravel(k2_z), np.ravel(k3_z)])
+                
+                # Slice comet_params for just this redshift
+                cp_z = {k: (v[i] if isinstance(v, (np.ndarray, list)) and len(v) == nz else v) 
+                        for k, v in comet_params.items()}
+                
+                for k, v in emu.params.items():
+                    if k not in cp_z and isinstance(v, (np.ndarray, list)) and len(v) == nz:
+                        cp_z[k] = v[i]
+     
+                # hack, we need to force de_mode to w0wa, otherwise comet will crash
+                kwargs_ = kwargs.copy()
+                kwargs_['de_model'] = 'w0wa'
+                 
+                # Call Pdw. Output is a 1D array of shape (len(k_all_z),)
+                pdw_z = emu.Pdw(k_all_z, cp_z, mu=0.6, **kwargs_)
+                
+                n1_z, n2_z = k1_z.size, k2_z.size
+                
+                # Unpack and assign back to the correct redshift slice
+                pdw1[..., i] = pdw_z[:n1_z].reshape(k1_z.shape)
+                pdw2[..., i] = pdw_z[n1_z:n1_z+n2_z].reshape(k2_z.shape)
+                pdw3[..., i] = pdw_z[n1_z+n2_z:].reshape(k3_z.shape)
         else:
+            k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
+            pdw_all = emu.Pdw(k_all, comet_params, mu=0.6, **kwargs)
+            
+            n1, n2 = k1_p.size, k2_p.size
             pdw1 = pdw_all[:n1].reshape(k1_p.shape)
             pdw2 = pdw_all[n1:n1+n2].reshape(k2_p.shape)
             pdw3 = pdw_all[n1+n2:].reshape(k3_p.shape)
