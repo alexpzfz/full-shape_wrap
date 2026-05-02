@@ -359,6 +359,19 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2
         bfull_flat = bfull.reshape(n, -1, nz)
         for ll in ell:
             res[ll] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[ll])
+            if interpolate_k1k2:
+                interpolated_z = []
+                for iz in range(nz):
+                    grid_values = res[ll][:, iz].reshape(interp_grid_size, interp_grid_size)
+                    if k1k2_interp_method == 'linear':
+                        interp_func = RegularGridInterpolator((k1_grid, k2_grid), grid_values, method='linear')
+                        interpolated_z.append(interp_func(interp_points))
+                    elif k1k2_interp_method == 'cubic':
+                        interp_func = RectBivariateSpline(k1_grid, k2_grid, grid_values, kx=3, ky=3, s=0)
+                        interpolated_z.append(interp_func.ev(interp_points[:, 0], interp_points[:, 1]))
+                    else:
+                        raise ValueError(f"Unsupported k1k2_interp_method: {k1k2_interp_method}")
+                res[ll] = np.column_stack(interpolated_z)
     else:
         # Reshape bfull to (n, nmu1 * nmu12 * nphi) for a blazing fast BLAS matrix-vector product
         bfull_flat = bfull.reshape(n, -1)
@@ -655,13 +668,27 @@ def bX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
     return res
 
 
-def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, use_pdw_interp=False, **kwargs):
-    nmu1, nmu12, nphi = kwargs.pop('nmu1', 5), kwargs.pop('nmu12', 12), kwargs.pop('nphi', 5)
+def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, use_pdw_interp=False, 
+                    interpolate_k1k2=False, **kwargs):
+    n = k1.shape[0]
+    nmu1 = kwargs.pop('nmu1', 5) # cos(\omega)
+    nmu12 = kwargs.pop('nmu12', 12) # cos(\theta_{12})
+    nphi = kwargs.pop('nphi', 5) # \phi
+    k1k2_interp_method = kwargs.pop('k1k2_interp_method', 'cubic')
+    k1k2_interp_grid_size = kwargs.pop('k1k2_interp_grid_size', None)
+    k1k2_interp_adaptive = kwargs.pop('k1k2_interp_adaptive', True)
+    k1k2_interp_scale = kwargs.pop('k1k2_interp_scale', 'log')
     mu12_transform = kwargs.pop('mu12_transform', 'quadratic')
+
     mu1, w_mu1 = np.polynomial.legendre.leggauss(nmu1)
     
-    # Resolves k3 ~ 0 singularity when k1 ~ k2 while perfectly preserving _PROJ_CACHE
+    # Change of variables for mu12 to resolve the k3 ~ 0 singularity when k1 ~ k2
     x_mu12, w_x_mu12 = np.polynomial.legendre.leggauss(nmu12)
+    phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)
+    w_phi = 2 * np.pi / nphi
+    cphi = np.cos(phi)
+    w_cphi = w_phi * np.ones_like(cphi) 
+
     if mu12_transform == 'linear':
         mu12 = x_mu12
         w_mu12 = w_x_mu12
@@ -671,30 +698,73 @@ def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, use_pdw_interp=Fals
     elif mu12_transform == 'quartic':
         mu12 = 0.125 * (x_mu12 + 1)**4 - 1.0
         w_mu12 = w_x_mu12 * 0.5 * (x_mu12 + 1)**3
-    
-    phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)
-    w_phi = 2 * np.pi / nphi
+
+
     mu1 = mu1[None, :, None, None] # shape (1, nmu1, 1, 1)
     w_mu1 = w_mu1[None, :, None, None] # shape (1, nmu1, 1, 1)
     mu12 = mu12[None, None, :, None] # shape (1, 1, nmu12, 1)
     w_mu12 = w_mu12[None, None, :, None] # shape (1, 1, nmu12, 1)
+    cphi = cphi[None, None, None, :] # shape (1, 1, 1, nphi)
+    w_cphi = w_cphi[None, None, None, :] # shape (1, 1, 1, nphi)
     phi = phi[None, None, None, :] # shape (1, 1, 1, nphi)
 
-    k1, k2 = k1[:, None, None, None], k2[:, None, None, None] # shape (ntri, 1, 1, 1)
+    if not interpolate_k1k2:
+        k1, k2 = k1[:, None, None, None], k2[:, None, None, None] # shape (n, 1, 1, 1)
+    else:
+        k1_old, k2_old = k1.copy(), k2.copy()
+        n_input = k1_old.shape[0]
+        if k1k2_interp_grid_size is not None:
+            interp_grid_size = max(4, int(k1k2_interp_grid_size))
+        elif k1k2_interp_adaptive:
+            # For large n this keeps interpolation accurate while avoiding oversized grids.
+            interp_grid_size = int(np.clip(np.sqrt(n_input), 20, 40))
+        else:
+            interp_grid_size = 30
+
+        if k1k2_interp_scale == 'log':
+            k1_grid = np.logspace(np.log10(k1_old.min()*0.99), np.log10(k1_old.max()*1.1), interp_grid_size, endpoint=True)
+            k2_grid = np.logspace(np.log10(k2_old.min()*0.99), np.log10(k2_old.max()*1.1), interp_grid_size, endpoint=True)
+        elif k1k2_interp_scale == 'linear':
+            k1_grid = np.linspace(k1_old.min()*0.99, k1_old.max()*1.1, interp_grid_size, endpoint=True)
+            k2_grid = np.linspace(k2_old.min()*0.99, k2_old.max()*1.1, interp_grid_size, endpoint=True)
+        elif k1k2_interp_scale == 'hybrid':
+            # Logarithmic spacing at low k and linear spacing at high k
+            kthresh = 0.02
+            log_size = interp_grid_size // 4
+            lin_size = interp_grid_size - log_size
+            k1_grid_log = np.logspace(np.log10(k1_old.min()*0.99), np.log10(kthresh*0.99), log_size, endpoint=True)
+            k1_grid_lin = np.linspace(kthresh*1.05, k1_old.max()*1.1, lin_size, endpoint=True)
+            k1_grid = np.concatenate([k1_grid_log, k1_grid_lin])
+
+            k2_grid_log = np.logspace(np.log10(k2_old.min()*0.99), np.log10(kthresh*0.99), log_size, endpoint=True)
+            k2_grid_lin = np.linspace(kthresh*1.05, k2_old.max()*1.1, lin_size, endpoint=True)
+            k2_grid = np.concatenate([k2_grid_log, k2_grid_lin])
+
+        interp_points = np.column_stack((k1_old, k2_old))
+
+        k1 = k1_grid
+        k2 = k2_grid
+        k1, k2 = np.meshgrid(k1, k2, indexing='ij') # shape (35, 35)
+        k1 = k1.flatten()[:, None, None, None] # shape (n, 1, 1, 1)
+        k2 = k2.flatten()[:, None, None, None] # shape (n, 1, 1, 1)
+        n = k1.shape[0]
     
-    k3 = np.sqrt(k1**2 + k2**2 + 2 * k1 * k2 * mu12) # shape (ntri, 1, nmu12, 1)
-    mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi) # shape (ntri, nmu1, nmu12, nphi)
+    # get k3 using the triangle condition
+    k3 = np.sqrt(k1**2 + k2**2 + 2 * k1 * k2 * mu12) # shape (n, 1, nmu12, 1)
+    # get mu2 using the Scoccimarro coordinate system
+    mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * cphi # shape (n, nmu1, nmu12, nphi)
     
     bfull = bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram=diagram,
-                  use_pdw_interp=use_pdw_interp, **kwargs) # shape (ntri, nmu1, nmu12, nphi)
+                  use_pdw_interp=use_pdw_interp, **kwargs) # shape (n, nmu1, nmu12, nphi)
                   
     is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
     
     if diagram == 'B_NB0':
+        n_out = n_input if interpolate_k1k2 else k1.shape[0]
         if is_batched:
-            b0 = np.ones((k1.shape[0], len(comet_params['z']))) * bfull[0, 0, 0, 0, :]
+            b0 = np.ones((n_out, len(comet_params['z']))) * bfull[0, 0, 0, 0, :]
         else:
-            b0 = np.ones(k1.shape[0]) * bfull[0, 0, 0, 0]
+            b0 = np.ones(n_out) * bfull[0, 0, 0, 0]
         res = {ll: b0 if ll == (0, 0, 0) else np.zeros_like(b0) for ll in ell}
         return res
 
@@ -713,13 +783,41 @@ def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, use_pdw_interp=Fals
     res = {}
     if is_batched:
         nz = len(comet_params['z'])
-        bfull_flat = bfull.reshape(bfull.shape[0], -1, nz)
+        bfull_flat = bfull.reshape(n, -1, nz)
         for ll in ell:
             res[ll] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[ll])
+            if interpolate_k1k2:
+                interpolated_z = []
+                for iz in range(nz):
+                    grid_values = res[ll][:, iz].reshape(interp_grid_size, interp_grid_size)
+                    if k1k2_interp_method == 'linear':
+                        interp_func = RegularGridInterpolator((k1_grid, k2_grid), grid_values, method='linear')
+                        interpolated_z.append(interp_func(interp_points))
+                    elif k1k2_interp_method == 'cubic':
+                        interp_func = RectBivariateSpline(k1_grid, k2_grid, grid_values, kx=3, ky=3, s=0)
+                        interpolated_z.append(interp_func.ev(interp_points[:, 0], interp_points[:, 1]))
+                    else:
+                        raise ValueError(f"Unsupported k1k2_interp_method: {k1k2_interp_method}")
+                res[ll] = np.column_stack(interpolated_z)
     else:
-        bfull_flat = bfull.reshape(bfull.shape[0], -1)
+        bfull_flat = bfull.reshape(n, -1)
         for ll in ell:
-            res[ll] = bfull_flat @ proj_ops[ll]
+            res[ll] = np.dot(bfull_flat, proj_ops[ll])
+            if interpolate_k1k2:
+                grid_values = res[ll].reshape(interp_grid_size, interp_grid_size)
+                if k1k2_interp_method == 'linear':
+                    interp_func = RegularGridInterpolator(
+                        (k1_grid, k2_grid),
+                        grid_values,
+                        method='linear',
+                    )
+                    res[ll] = interp_func(interp_points)
+                elif k1k2_interp_method == 'cubic':
+                    interp_func = RectBivariateSpline(k1_grid, k2_grid, grid_values, kx=3, ky=3, s=0)
+                    res[ll] = interp_func.ev(interp_points[:, 0], interp_points[:, 1])
+                else:
+                    raise ValueError(f"Unsupported k1k2_interp_method: {k1k2_interp_method}")
+
     return res
 
 
