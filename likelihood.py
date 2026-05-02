@@ -149,7 +149,7 @@ class Likelihood:
         for i, obs in enumerate(self.observables):
             n_data = obs.n_data
             n_mocks = self.nmocks_covs[i]
-            n_params = self.params.n_free_params
+            n_params = self.params.n_free_params if self.nobservables == 1 else self.params.n_free_params_iz(i)
 
             if n_mocks is not None:
                 h2007_factor = self._get_hartlap2007_factor(n_data, n_mocks)
