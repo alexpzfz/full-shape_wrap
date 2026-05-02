@@ -132,8 +132,7 @@ class COMET(comet, BaseModel):
             k_eval = self.get_kvec_compression(min(k_all), max(k_all))
             pell_eval = self.Pell(k_eval, params, ell_all, de_model=de_model)
             pell_list = np.stack([pell_eval[f'ell{ll}'] for ll in ell_all], axis=1)
-            spline = make_interp_spline(k_eval, pell_list, axis=0)(k_all)
-            spline = spline.reshape((spline.shape[0] * spline.shape[1],)  + spline.shape[2:], order='F')
+            spline = make_interp_spline(k_eval, pell_list, axis=0)(k_all) #shapke nk nell
             pell_batched = {f'ell{ll}': spline[:, i, ...] for i, ll in enumerate(ell_all)} 
 
         
@@ -202,16 +201,16 @@ class COMET(comet, BaseModel):
 
         if (obs.kwin is not None for obs in observables) and self.use_interp_kwin:
             k_eval = self.get_kvec_compression(min(k_all), max(k_all))
-            pX_eval = px_ell_func(k_eval, params, ell_all, de_model=de_model)
+            pX_eval = px_ell_func(k_eval, params, ell_all, diagram, de_model=de_model)
             pX_list = np.stack([pX_eval[f'ell{ll}'] for ll in ell_all], axis=1)
             spline = make_interp_spline(k_eval, pX_list, axis=0)(k_all)
-            spline = spline.reshape((spline.shape[0] * spline.shape[1],)  + spline.shape[2:], order='F')
             pX_batched = {f'ell{ll}': spline[:, i, ...] for i, ll in enumerate(ell_all)} 
+            
 
         
         # Evaluate model only at unique k values
         else:
-            pX_batched = self.px_ell_func(k_all, params, ell_all, de_model=de_model)
+            pX_batched = px_ell_func(k_all, params, ell_all, diagram, de_model=de_model)
          
         # # Determine which X prediction method to use
         # if 'a0' in diagram or 'a2' in diagram or 'a4' in diagram:
