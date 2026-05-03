@@ -105,58 +105,58 @@ def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, use_pdw_interp=False
             pdw1 = pdw_all[:n1].reshape(k1_p.shape)
             pdw2 = pdw_all[n1:n1+n2].reshape(k2_p.shape)
             pdw3 = pdw_all[n1+n2:].reshape(k3_p.shape)
-    # else:
-    #     k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
-    #     kmin, kmax = np.min(k_all), np.max(k_all)
-        
-    #     # Add a tiny buffer so we don't accidentally extrapolate at the boundaries
-    #     kgrid = get_kvec_compression(kmin * 0.99, kmax * 1.01, 100)
-    #     pdw_grid = emu.Pdw(kgrid, comet_params, mu=0.6, **kwargs)
-
-    #     is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
-
-    #     if is_batched:
-    #         nz = pdw_grid.shape[1]
-            
-    #         # 1. Pre-allocate arrays to match the batched shape exactly
-    #         pdw1 = np.empty_like(k1_p)
-    #         pdw2 = np.empty_like(k2_p)
-    #         pdw3 = np.empty_like(k3_p)
-            
-    #         # 2. Evaluate redshift slices individually to avoid (N, nz, nz) explosion
-    #         for i in range(nz):
-    #             spline_z = make_interp_spline(kgrid, pdw_grid[:, i], k=3)
-    #             pdw1[..., i] = spline_z(k1_p[..., i])
-    #             pdw2[..., i] = spline_z(k2_p[..., i])
-    #             pdw3[..., i] = spline_z(k3_p[..., i])
-                
-    #     else:
-    #         # 1D unbatched case works exactly as you wrote it
-    #         spline = make_interp_spline(kgrid, pdw_grid, axis=0, k=3)
-    #         pdw1 = spline(k1_p)
-    #         pdw2 = spline(k2_p)
-    #         pdw3 = spline(k3_p)
     else:
         k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
         kmin, kmax = np.min(k_all), np.max(k_all)
         
-        # Add a tiny buffer to avoid edge extrapolation crashes
+        # Add a tiny buffer so we don't accidentally extrapolate at the boundaries
         kgrid = get_kvec_compression(kmin * 0.99, kmax * 1.01, 100)
         pdw_grid = emu.Pdw(kgrid, comet_params, mu=0.6, **kwargs)
 
         is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
 
-        spline = make_interp_spline(kgrid, pdw_grid, axis=0, k=3)
-
         if is_batched:
-            # Using axis1=-2 and axis2=-1 ensures this works even if k1_p has more dimensions (like nmu, nphi)
-            pdw1 = np.diagonal(spline(k1_p), axis1=-2, axis2=-1)
-            pdw2 = np.diagonal(spline(k2_p), axis1=-2, axis2=-1)
-            pdw3 = np.diagonal(spline(k3_p), axis1=-2, axis2=-1)
+            nz = pdw_grid.shape[1]
+            
+            # 1. Pre-allocate arrays to match the batched shape exactly
+            pdw1 = np.empty_like(k1_p)
+            pdw2 = np.empty_like(k2_p)
+            pdw3 = np.empty_like(k3_p)
+            
+            # 2. Evaluate redshift slices individually to avoid (N, nz, nz) explosion
+            for i in range(nz):
+                spline_z = make_interp_spline(kgrid, pdw_grid[:, i], k=3)
+                pdw1[..., i] = spline_z(k1_p[..., i])
+                pdw2[..., i] = spline_z(k2_p[..., i])
+                pdw3[..., i] = spline_z(k3_p[..., i])
+                
         else:
+            # 1D unbatched case works exactly as you wrote it
+            spline = make_interp_spline(kgrid, pdw_grid, axis=0, k=3)
             pdw1 = spline(k1_p)
             pdw2 = spline(k2_p)
             pdw3 = spline(k3_p)
+    # else:
+    #     k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
+    #     kmin, kmax = np.min(k_all), np.max(k_all)
+        
+    #     # Add a tiny buffer to avoid edge extrapolation crashes
+    #     kgrid = get_kvec_compression(kmin * 0.99, kmax * 1.01, 100)
+    #     pdw_grid = emu.Pdw(kgrid, comet_params, mu=0.6, **kwargs)
+
+    #     is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
+
+    #     spline = make_interp_spline(kgrid, pdw_grid, axis=0, k=3)
+
+    #     if is_batched:
+    #         # Using axis1=-2 and axis2=-1 ensures this works even if k1_p has more dimensions (like nmu, nphi)
+    #         pdw1 = np.diagonal(spline(k1_p), axis1=-2, axis2=-1)
+    #         pdw2 = np.diagonal(spline(k2_p), axis1=-2, axis2=-1)
+    #         pdw3 = np.diagonal(spline(k3_p), axis1=-2, axis2=-1)
+    #     else:
+    #         pdw1 = spline(k1_p)
+    #         pdw2 = spline(k2_p)
+    #         pdw3 = spline(k3_p)
 
         # if is_batched:
         #     pdw_interp_list = [interp1d(kgrid, pdw_grid[:, j], axis=0, kind='cubic') for j in range(pdw_grid.shape[1])]
@@ -849,36 +849,23 @@ def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, use_pdw_interp=Fals
         for ll in ell:
             res[ll] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[ll], optimize=True)
             if interpolate_k1k2:
-                interpolated_z = []
+                n_points = interp_points.shape[0]
+                interpolated_batch = np.zeros((n_points, nz))
+                degree_map = {'linear': 1, 'quadratic': 2, 'cubic': 3, 'quintic': 5}
                 for iz in range(nz):
-                    grid_values = res[ll][:, iz].reshape(interp_grid_size, interp_grid_size)
-                    if k1k2_interp_method == 'linear':
-                        interp_func = RegularGridInterpolator((k1_grid, k2_grid), grid_values, method='linear')
-                        interpolated_z.append(interp_func(interp_points))
-                    elif k1k2_interp_method == 'cubic':
-                        interp_func = RectBivariateSpline(k1_grid, k2_grid, grid_values, kx=3, ky=3, s=0)
-                        interpolated_z.append(interp_func.ev(interp_points[:, 0], interp_points[:, 1]))
-                    else:
-                        raise ValueError(f"Unsupported k1k2_interp_method: {k1k2_interp_method}")
-                res[ll] = np.column_stack(interpolated_z)
+                    grid_vallues = res[ll][:, iz].reshape(interp_grid_size, interp_grid_size)
+                    interp_func = RectBivariateSpline(k1_grid, k2_grid, grid_vallues, kx=degree_map[k1k2_interp_method], ky=degree_map[k1k2_interp_method], s=0)
+                    interpolated_batch[:, iz] = interp_func.ev(interp_points[:, 0], interp_points[:, 1])
+                res[ll] = interpolated_batch
     else:
         bfull_flat = bfull.reshape(n, -1)
         for ll in ell:
             res[ll] = np.dot(bfull_flat, proj_ops[ll])
             if interpolate_k1k2:
-                grid_values = res[ll].reshape(interp_grid_size, interp_grid_size)
-                if k1k2_interp_method == 'linear':
-                    interp_func = RegularGridInterpolator(
-                        (k1_grid, k2_grid),
-                        grid_values,
-                        method='linear',
-                    )
-                    res[ll] = interp_func(interp_points)
-                elif k1k2_interp_method == 'cubic':
-                    interp_func = RectBivariateSpline(k1_grid, k2_grid, grid_values, kx=3, ky=3, s=0)
-                    res[ll] = interp_func.ev(interp_points[:, 0], interp_points[:, 1])
-                else:
-                    raise ValueError(f"Unsupported k1k2_interp_method: {k1k2_interp_method}")
+                degree_map = {'linear': 1, 'quadratic': 2, 'cubic': 3, 'quintic': 5}
+                grid_vallues = res[ll].reshape(interp_grid_size, interp_grid_size)
+                interp_func = RectBivariateSpline(k1_grid, k2_grid, grid_vallues, kx=degree_map[k1k2_interp_method], ky=degree_map[k1k2_interp_method], s=0)
+                res[ll] = interp_func.ev(interp_points[:, 0], interp_points[:, 1])
 
     return res
 

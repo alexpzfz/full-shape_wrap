@@ -197,20 +197,30 @@ class Params:
     def n_free_params(self):
         return self.n_sampled_params + len(self.derived_am_names)
     
-    def n_free_params_iz(self, iz):
-        """Count number of free parameters for a specific redshift index (useful for multi-z setups)"""
-        count = 0
+
+    def get_iz_param_names(self, iz):
+        """Returns a list of parameters that determine the observable iz"""
+        iz_param_names = set()
         for name in self.sampled_param_names:
-            if name.endswith(f"_{iz}") or (self.nz == 1 and not "_" in name):
-                count += 1
-            # also if it's a cosmological parameter, since those are shared across redshifts
-            elif name in self.cosmo_params:
-                count += 1
+            if name.endswith(f"_{iz}"):
+                iz_param_names.add(name)
+            if name in self.cosmo_params:
+                iz_param_names.add(name)
+        for name in self.derived_order:
+            if name in self.cosmo_params:
+                iz_param_names.add(name)
         for name in self.derived_am_names:
-            if name.endswith(f"_{iz}") or (self.nz == 1 and not "_" in name):
-                count += 1
-        return count
-    
+            if name.endswith(f"_{iz}"):
+                iz_param_names.add(name)
+
+        return list(iz_param_names)
+        
+    def n_free_params_iz(self, iz):
+        """Returns the number of free parameters that determine the observable at redshift iz"""
+        return len(self.get_iz_param_names(iz))
+
+
+
     @property
     def fixed_cosmo(self):
         """Returns True if all cosmological parameters are fixed, False otherwise"""
