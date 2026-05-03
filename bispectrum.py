@@ -1,8 +1,10 @@
 import numpy as np
 from scipy.special import legendre, factorial, lpmv
-from scipy.interpolate import interp1d, RegularGridInterpolator, RectBivariateSpline, make_interp_spline
+from scipy.interpolate import interp1d, RegularGridInterpolator, RectBivariateSpline, make_interp_spline, CubicSpline
 from sympy.physics.wigner import wigner_3j
+from numba import njit
 
+einsum_opt = 'optimal' # 'greedy', True
 def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, use_pdw_interp=False, **kwargs):
     params = emu.params
     nbar = emu.nbar
@@ -52,28 +54,98 @@ def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, use_pdw_interp=False
     #         pdw3 = pdw_all[n1+n2:].reshape(k3_p.shape)
 
 
+    # if is_batched:
+    #     nz = len(comet_params['z'])
+    #     z_values = np.asarray(comet_params['z'], dtype=float)
+
+    #     k_all_flat = np.concatenate([k1_p.ravel(), k2_p.ravel(), k3_p.ravel()])
+    #     kmin, kmax = k_all_flat.min(), k_all_flat.max()
+    #     kgrid = get_kvec_compression(kmin, kmax, 100)
+
+    #     #kwargs_ = kwargs.copy()
+    #     #kwargs_['de_model'] = 'w0wa'
+    #     pdw_grid = emu.Pdw(kgrid, comet_params, mu=0.6, **kwargs)  # shape (100, nz)
+
+    #     sort_idx = np.argsort(z_values)
+    #     ky = min(3, nz - 1)
+    #     biv_spl = RectBivariateSpline(kgrid, z_values[sort_idx], pdw_grid[:, sort_idx], kx=3, ky=ky, s=0)
+
+    #     z_bcast = np.broadcast_to(z_values, k1_p.shape)
+    #     pdw1 = biv_spl.ev(k1_p.ravel(), z_bcast.ravel()).reshape(k1_p.shape)
+    #     z_bcast = np.broadcast_to(z_values, k2_p.shape)
+    #     pdw2 = biv_spl.ev(k2_p.ravel(), z_bcast.ravel()).reshape(k2_p.shape)
+    #     z_bcast = np.broadcast_to(z_values, k3_p.shape)
+    #     pdw3 = biv_spl.ev(k3_p.ravel(), z_bcast.ravel()).reshape(k3_p.shape)
+
+    # if is_batched:
+    #     nz = len(comet_params['z'])
+        
+    #     k_all_flat = np.concatenate([k1_p.ravel(), k2_p.ravel(), k3_p.ravel()])
+    #     kmin, kmax = k_all_flat.min(), k_all_flat.max()
+        
+    #     # Add a tiny buffer (1%) to prevent extrapolation errors at the bounds
+    #     kgrid = get_kvec_compression(kmin * 0.99, kmax * 1.01, 100)
+
+    #     pdw_grid = emu.Pdw(kgrid, comet_params, mu=0.6, **kwargs)  # shape (100, nz)
+
+    #     # 1D vectorised spline interpolation along the k-axis
+    #     spline = make_interp_spline(kgrid, pdw_grid, axis=0, k=3)
+        
+    #     # k1_p, k2_p, k3_p have a trailing dimension of 1 due to the [..., None] 
+    #     # added for `is_batched`. We slice it off with [..., 0] before evaluating.
+    #     # The spline automatically returns an ND-array with a trailing `nz` dimension.
+    #     pdw1 = spline(k1_p[..., 0])
+    #     pdw2 = spline(k2_p[..., 0])
+    #     pdw3 = spline(k3_p[..., 0])
     if is_batched:
         nz = len(comet_params['z'])
-        z_values = np.asarray(comet_params['z'], dtype=float)
-
-        k_all_flat = np.concatenate([k1_p.ravel(), k2_p.ravel(), k3_p.ravel()])
-        kmin, kmax = k_all_flat.min(), k_all_flat.max()
-        kgrid = get_kvec_compression(kmin, kmax, 100)
-
-        #kwargs_ = kwargs.copy()
-        #kwargs_['de_model'] = 'w0wa'
+        
+        kmin = min(k1_p.min(), k2_p.min(), k3_p.min())
+        kmax = max(k1_p.max(), k2_p.max(), k3_p.max())
+        
+        kgrid = get_kvec_compression(kmin * 0.99, kmax * 1.01, 100)
         pdw_grid = emu.Pdw(kgrid, comet_params, mu=0.6, **kwargs)  # shape (100, nz)
 
-        sort_idx = np.argsort(z_values)
-        ky = min(3, nz - 1)
-        biv_spl = RectBivariateSpline(kgrid, z_values[sort_idx], pdw_grid[:, sort_idx], kx=3, ky=ky, s=0)
+        pdw1 = np.empty_like(k1_p)
+        pdw2 = np.empty_like(k2_p)
+        pdw3 = np.empty_like(k3_p)
 
-        z_bcast = np.broadcast_to(z_values, k1_p.shape)
-        pdw1 = biv_spl.ev(k1_p.ravel(), z_bcast.ravel()).reshape(k1_p.shape)
-        z_bcast = np.broadcast_to(z_values, k2_p.shape)
-        pdw2 = biv_spl.ev(k2_p.ravel(), z_bcast.ravel()).reshape(k2_p.shape)
-        z_bcast = np.broadcast_to(z_values, k3_p.shape)
-        pdw3 = biv_spl.ev(k3_p.ravel(), z_bcast.ravel()).reshape(k3_p.shape)
+        for i in range(nz):
+            cs = CubicSpline(kgrid, pdw_grid[:, i])
+            pdw1[..., i] = cs(k1_p[..., i])
+            pdw2[..., i] = cs(k2_p[..., i])
+            pdw3[..., i] = cs(k3_p[..., i])
+    # if is_batched:
+    #     nz = len(comet_params['z'])
+        
+    #     kmin = min(k1_p.min(), k2_p.min(), k3_p.min())
+    #     kmax = max(k1_p.max(), k2_p.max(), k3_p.max())
+        
+    #     # 1. Evaluate on a 10x denser grid. 
+    #     # Linear interp on 1000 points = Cubic interp on 100 points, but 50x faster.
+    #     kgrid_dense = get_kvec_compression(kmin * 0.99, kmax * 1.01, 1000)
+    #     pdw_grid_dense = emu.Pdw(kgrid_dense, comet_params, mu=0.6, **kwargs)
+
+    #     # 2. Flatten all spatial dimensions down to 1D. 
+    #     # We keep 'nz' as the second dimension. Shape becomes (N_elements, nz).
+    #     k1_flat = k1_p.reshape(-1, nz)
+    #     k2_flat = k2_p.reshape(-1, nz)
+    #     k3_flat = k3_p.reshape(-1, nz)
+
+    #     pdw1_flat = np.empty_like(k1_flat)
+    #     pdw2_flat = np.empty_like(k2_flat)
+    #     pdw3_flat = np.empty_like(k3_flat)
+
+    #     # 3. np.interp runs in raw C and dominates Scipy spline performance.
+    #     for i in range(nz):
+    #         pdw1_flat[:, i] = np.interp(k1_flat[:, i], kgrid_dense, pdw_grid_dense[:, i])
+    #         pdw2_flat[:, i] = np.interp(k2_flat[:, i], kgrid_dense, pdw_grid_dense[:, i])
+    #         pdw3_flat[:, i] = np.interp(k3_flat[:, i], kgrid_dense, pdw_grid_dense[:, i])
+
+    #     # 4. Instantly reshape back to the original N-dimensional broadcast shape
+    #     pdw1 = pdw1_flat.reshape(k1_p.shape)
+    #     pdw2 = pdw2_flat.reshape(k2_p.shape)
+    #     pdw3 = pdw3_flat.reshape(k3_p.shape)
 
     elif not use_pdw_interp:
         k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
@@ -138,19 +210,21 @@ def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, use_pdw_interp=False
     Z1_2 = kernel_Z1(mu2_p, b1, f, mu_sq=mu2_sq)
     Z1_3 = kernel_Z1(mu3_p, b1, f, mu_sq=mu3_sq)
 
-    btree = tree_term(k1_p, k2_p, mu1_p, mu2_p, k3_p, mu3_p, b1, b2, g2, f, Z1_1, Z1_2) 
-    btree = btree * pdw1
-    btree = btree * pdw2
+    btree = tree_term(k1_p, k2_p, mu1_p, mu2_p, k3_p, mu3_p, b1, b2, g2, f, Z1_1, Z1_2) * pdw1 * pdw2 + \
+            tree_term(k2_p, k3_p, mu2_p, mu3_p, k1_p, mu1_p, b1, b2, g2, f, Z1_2, Z1_3) * pdw2 * pdw3 + \
+            tree_term(k3_p, k1_p, mu3_p, mu1_p, k2_p, mu2_p, b1, b2, g2, f, Z1_3, Z1_1) * pdw3 * pdw1
+    # # btree = btree * pdw1
+    # # btree = btree * pdw2
     
-    t2 = tree_term(k2_p, k3_p, mu2_p, mu3_p, k1_p, mu1_p, b1, b2, g2, f, Z1_2, Z1_3)
-    t2 = t2 * pdw2
-    t2 = t2 * pdw3
-    btree = btree + t2
+    # t2 = tree_term(k2_p, k3_p, mu2_p, mu3_p, k1_p, mu1_p, b1, b2, g2, f, Z1_2, Z1_3)
+    # t2 = t2 * pdw2
+    # t2 = t2 * pdw3
+    # btree = btree + t2
 
-    t3 = tree_term(k3_p, k1_p, mu3_p, mu1_p, k2_p, mu2_p, b1, b2, g2, f, Z1_3, Z1_1)
-    t3 = t3 * pdw3
-    t3 = t3 * pdw1
-    btree = btree + t3
+    # t3 = tree_term(k3_p, k1_p, mu3_p, mu1_p, k2_p, mu2_p, b1, b2, g2, f, Z1_3, Z1_1)
+    # t3 = t3 * pdw3
+    # t3 = t3 * pdw1
+    # btree = btree + t3
     
     # now the stochastic part
     NB0, MB0, NP0 = params['NB0'], params['MB0'], params['NP0']
@@ -160,30 +234,36 @@ def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, use_pdw_interp=False
     kxmu2_sq = (k2_p**2) * mu2_sq
     kxmu3_sq = (k3_p**2) * mu3_sq
 
-    bstoch = stoch_term(kxmu1_sq, mu1_sq, b1, f, avir, sv, MB0, NP0, Z1_1) 
-    bstoch = bstoch * pdw1
+    bstoch = stoch_term(kxmu1_sq, mu1_sq, b1, f, avir, sv, MB0, NP0, Z1_1) * pdw1 +\
+             stoch_term(kxmu2_sq, mu2_sq, b1, f, avir, sv, MB0, NP0, Z1_2) * pdw2 +\
+             stoch_term(kxmu3_sq, mu3_sq, b1, f, avir, sv, MB0, NP0, Z1_3) * pdw3
+    # bstoch = bstoch * pdw1
     
-    s2 = stoch_term(kxmu2_sq, mu2_sq, b1, f, avir, sv, MB0, NP0, Z1_2)
-    s2 = s2 * pdw2
-    bstoch = bstoch + s2
+    # s2 = stoch_term(kxmu2_sq, mu2_sq, b1, f, avir, sv, MB0, NP0, Z1_2)
+    # s2 = s2 * pdw2
+    # bstoch = bstoch + s2
 
-    s3 = stoch_term(kxmu3_sq, mu3_sq, b1, f, avir, sv, MB0, NP0, Z1_3)
-    s3 = s3 * pdw3
-    bstoch = bstoch + s3
+    # s3 = stoch_term(kxmu3_sq, mu3_sq, b1, f, avir, sv, MB0, NP0, Z1_3)
+    # s3 = s3 * pdw3
+    # bstoch = bstoch + s3
 
-    bstoch = bstoch * (1.0 / nbar)
-    bstoch = bstoch + (NB0/nbar**2)
+    # bstoch = bstoch * (1.0 / nbar)
+    # bstoch = bstoch + (NB0/nbar**2)
+
+    bstoch *= (1.0 / nbar)
+    bstoch += (NB0/nbar**2)
 
     #construct vdg bispectrum
     lambda2 = -0.5 * f**2 * (kxmu1_sq + kxmu2_sq + kxmu3_sq)
     winfty = w_B_infty(lambda2, avir, sv)
-    btree = btree * winfty
-    btree = btree + bstoch
-    btree = btree / qiso6
-    return btree
+    # btree = btree * winfty
+    # btree = btree + bstoch
+    # btree = btree / qiso6
+    bvdg = (btree * winfty + bstoch) / qiso6
+    return bvdg
 
 
-
+@njit
 def tree_term(ki, kj, mui, muj, kk, muk, b1, b2, g2, f, Z1_i, Z1_j):
     muij = get_dot_cosine(ki, kj, kk)
     t = (2.0 * Z1_i) * Z1_j
@@ -191,6 +271,7 @@ def tree_term(ki, kj, mui, muj, kk, muk, b1, b2, g2, f, Z1_i, Z1_j):
     t = t * kernel_Z2(ki, kj, mui, muj, muij, kk, -muk, b1, b2, g2, f, Z1_i, Z1_j)
     return t
 
+@njit
 def stoch_term(kxmu_sq, mui_sq, b1, f, avir, sv, MB0, NP0, Z1_i):
     t = (b1 * MB0 + (f * NP0) * mui_sq) * Z1_i
     lambda2 = -f**2 * kxmu_sq
@@ -251,7 +332,7 @@ def bispectrum_scoccimarro_proj(k1, k2, k3, emu, comet_params, ell=[(0, 0), (2, 
         proj_op = (ylm * weights).ravel()
             
         if is_batched:
-            integral = np.einsum('ijk,j->ik', bfull_flat, proj_op, optimize=True)
+            integral = np.einsum('ijk,j->ik', bfull_flat, proj_op, optimize=einsum_opt)
         else:
             integral = np.dot(bfull_flat, proj_op)
 
@@ -363,7 +444,7 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2
     #     nz = len(comet_params['z'])
     #     bfull_flat = bfull.reshape(n, -1, nz)
     #     for ll in ell:
-    #         res[ll] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[ll], optimize=True)
+    #         res[ll] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[ll], optimize=einsum_opt)
     #         if interpolate_k1k2:
     #             interpolated_z = []
     #             for iz in range(nz):
@@ -389,17 +470,17 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2
     if is_batched:
         bfull_flat = bfull.reshape(n, -1, nz)
         for ll in ell:
-            res[ll] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[ll], optimize=True)
+            res[ll] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[ll], optimize=einsum_opt)
             if interpolate_k1k2:
                 vals = res[ll].reshape(ng, ng, nz)
-                res[ll] = np.einsum('pi,pj,ijn->pn', W1, W2, vals, optimize=True)
+                res[ll] = np.einsum('pi,pj,ijn->pn', W1, W2, vals, optimize=einsum_opt)
     else:
         bfull_flat = bfull.reshape(n, -1)
         for ll in ell:
             res[ll] = np.dot(bfull_flat, proj_ops[ll])
             if interpolate_k1k2:
                 vals = res[ll].reshape(ng, ng)
-                res[ll] = np.einsum('pi,pj,ij->p', W1, W2, vals, optimize=True)
+                res[ll] = np.einsum('pi,pj,ij->p', W1, W2, vals, optimize=einsum_opt)
 
     return res
 
@@ -443,7 +524,7 @@ def bispectrum_sugiyama_proj_alt(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 
         nz = len(comet_params['z'])
         bfull_flat = bfull.reshape(n, -1, nz)
         for ll in ell:
-            res[ll] = np.einsum('ijk,j->ik', bfull_flat, proj_op[ll], optimize=True)
+            res[ll] = np.einsum('ijk,j->ik', bfull_flat, proj_op[ll], optimize=einsum_opt)
     else:
         bfull_flat = bfull.reshape(n, -1)
         for ll in ell:
@@ -552,24 +633,21 @@ def bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, use_pdw_interp=False
 
     if is_batched:
         nz = len(comet_params['z'])
-        z_values = np.asarray(comet_params['z'], dtype=float)
+        kmin = min(k1_p.min(), k2_p.min(), k3_p.min())
+        kmax = max(k1_p.max(), k2_p.max(), k3_p.max())
 
-        k_all_flat = np.concatenate([k1_p.ravel(), k2_p.ravel(), k3_p.ravel()])
-        kmin, kmax = k_all_flat.min(), k_all_flat.max()
-        kgrid = get_kvec_compression(kmin, kmax, 100)
-
+        kgrid = get_kvec_compression(kmin * 0.99, kmax * 1.01, 100)
         pdw_grid = emu.Pdw(kgrid, comet_params, mu=0.6, **kwargs)  # shape (100, nz)
 
-        sort_idx = np.argsort(z_values)
-        ky = min(3, nz - 1)
-        biv_spl = RectBivariateSpline(kgrid, z_values[sort_idx], pdw_grid[:, sort_idx], kx=3, ky=ky, s=0)
+        pdw1 = np.empty_like(k1_p)
+        pdw2 = np.empty_like(k2_p)
+        pdw3 = np.empty_like(k3_p)
 
-        z_bcast = np.broadcast_to(z_values, k1_p.shape)
-        pdw1 = biv_spl.ev(k1_p.ravel(), z_bcast.ravel()).reshape(k1_p.shape)
-        z_bcast = np.broadcast_to(z_values, k2_p.shape)
-        pdw2 = biv_spl.ev(k2_p.ravel(), z_bcast.ravel()).reshape(k2_p.shape)
-        z_bcast = np.broadcast_to(z_values, k3_p.shape)
-        pdw3 = biv_spl.ev(k3_p.ravel(), z_bcast.ravel()).reshape(k3_p.shape)
+        for i in range(nz):
+            cs = CubicSpline(kgrid, pdw_grid[:, i])
+            pdw1[..., i] = cs(k1_p[..., i])
+            pdw2[..., i] = cs(k2_p[..., i])
+            pdw3[..., i] = cs(k3_p[..., i])
 
     elif not use_pdw_interp:
         k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
@@ -582,7 +660,7 @@ def bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, use_pdw_interp=False
     else:
         k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
         kmin, kmax = np.min(k_all), np.max(k_all)
-        kgrid = get_kvec_compression(kmin, kmax, 100)
+        kgrid = get_kvec_compression(kmin * 0.99, kmax * 1.01, 100)
         pdw_grid = emu.Pdw(kgrid, comet_params, mu=0.6, **kwargs)
 
         spline = make_interp_spline(kgrid, pdw_grid, axis=0, k=3)
@@ -655,7 +733,7 @@ def bX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
         proj_op = (ylm * weights).ravel()
             
         if is_batched:
-            integral = np.einsum('ijk,j->ik', bfull_flat, proj_op, optimize=True)
+            integral = np.einsum('ijk,j->ik', bfull_flat, proj_op, optimize=einsum_opt)
         else:
             integral = np.dot(bfull_flat, proj_op)
             
@@ -794,42 +872,47 @@ def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, use_pdw_interp=Fals
     if is_batched:
         bfull_flat = bfull.reshape(n, -1, nz)
         for ll in ell:
-            res[ll] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[ll], optimize=True)
+            res[ll] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[ll], optimize=einsum_opt)
             if interpolate_k1k2:
                 vals = res[ll].reshape(ng, ng, nz)
-                res[ll] = np.einsum('pi,pj,ijn->pn', W1, W2, vals, optimize=True)
+                res[ll] = np.einsum('pi,pj,ijn->pn', W1, W2, vals, optimize=einsum_opt)
     else:
         bfull_flat = bfull.reshape(n, -1)
         for ll in ell:
             res[ll] = np.dot(bfull_flat, proj_ops[ll])
             if interpolate_k1k2:
                 vals = res[ll].reshape(ng, ng)
-                res[ll] = np.einsum('pi,pj,ij->p', W1, W2, vals, optimize=True)
+                res[ll] = np.einsum('pi,pj,ij->p', W1, W2, vals, optimize=einsum_opt)
 
     return res
 
-
+@njit
 def kernel_Z1(mu, b1, f, mu_sq=None):
     if mu_sq is None:
         mu_sq = mu**2
     return b1 + f * mu_sq
-
+@njit
 def get_dot_cosine(k1, k2, k3):
     """Calculate (k1 . k2) / (|k1| |k2|) using the triangle condition"""
     return (k3**2 - k1**2 - k2**2) / (2 * k1 * k2)
 
+@njit
 def kernel_G2(k1, k2, mu12):
     return 3./7. + 4./7. * mu12**2 + 0.5 * (k1/k2 + k2/k1) * mu12
 
+@njit
 def kernel_F2(k1, k2, mu12):
     return 5./7. + 2./7. * mu12**2 + 0.5 * (k1/k2 + k2/k1) * mu12
 
+@njit
 def kernel_K(mu12):
     return mu12**2 -1.
 
+@njit
 def kernel_K2(k1, k2, mu12, b1, b2, g2):
     return b1 * kernel_F2(k1, k2, mu12) + b2/2. + g2 * kernel_K(mu12)
 
+@njit
 def kernel_Z2(k1, k2, mu1, mu2, mu12, k, mu, b1, b2, g2, f, Z1_1=None, Z1_2=None):
     # k = k3 = k1^2 + k2^2 - 2 k1 k2 mu12
     # mu = (k1 mu1 + k2 mu2) / k = -mu3
@@ -842,17 +925,18 @@ def kernel_Z2(k1, k2, mu1, mu2, mu12, k, mu, b1, b2, g2, f, Z1_1=None, Z1_2=None
            f * mu**2 * kernel_G2(k1, k2, mu12) + \
            0.5 * f * k * mu * ((mu1/k1) * Z1_2 + (mu2/k2) * Z1_1)
 
+@njit
 def w_B_infty(lamb2, avir, sv):
     return 1./(1 - lamb2 * avir**2)**(3./2.) * \
           np.exp(lamb2 * sv**2/(1 - lamb2 * avir**2))
 
 def w_12_0_0():
     return 1.0
-
+@njit
 def w_12_infty_0(lamb2, avir, sv):
     return 1./(1 - lamb2 * avir**2)**(3./2.) * \
             np.exp(lamb2 * sv**2/(1 - lamb2 * avir**2)) 
-
+@njit
 def apply_ap(k, mu, qpar, qperp):
     # calculate real coordinates
     F = qpar / qperp
