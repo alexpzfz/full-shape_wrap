@@ -51,91 +51,48 @@ def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, use_pdw_interp=False
     #         pdw2 = pdw_all[n1:n1+n2].reshape(k2_p.shape)
     #         pdw3 = pdw_all[n1+n2:].reshape(k3_p.shape)
 
-    if not use_pdw_interp:
-        is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
 
-        if is_batched:
-            nz = len(comet_params['z'])
-            
-            # Pre-allocate output arrays matching the batched shapes
-            pdw1 = np.empty_like(k1_p)
-            pdw2 = np.empty_like(k2_p)
-            pdw3 = np.empty_like(k3_p)
+    if is_batched:
+        nz = len(comet_params['z'])
+        z_values = np.asarray(comet_params['z'], dtype=float)
 
-            # for k, v in emu.params.items():
-            #     if isinstance(v, np.ndarray) and v.size > 1:
-            #         emu.params[k] = v.item(0)
-            
-            # Evaluate strictly per redshift slice to avoid O(N^2) Cartesian product
-            for i in range(nz):
-                # Extract coordinates for this redshift slice
-                k1_z = k1_p[..., i]
-                k2_z = k2_p[..., i]
-                k3_z = k3_p[..., i]
-                
-                # Concatenate just the k's for this slice
-                k_all_z = np.concatenate([np.ravel(k1_z), np.ravel(k2_z), np.ravel(k3_z)])
-                
-                # Slice comet_params for just this redshift
-                cp_z = {k: (v[i] if isinstance(v, (np.ndarray, list)) and len(v) == nz else v) 
-                        for k, v in comet_params.items()}
-                
-                for k, v in emu.params.items():
-                    if k not in cp_z and isinstance(v, (np.ndarray, list)) and len(v) == nz:
-                        cp_z[k] = v[i]
-     
-                # hack, we need to force de_mode to w0wa, otherwise comet will crash
-                kwargs_ = kwargs.copy()
-                kwargs_['de_model'] = 'w0wa'
-                 
-                # Call Pdw. Output is a 1D array of shape (len(k_all_z),)
-                pdw_z = emu.Pdw(k_all_z, cp_z, mu=0.6, **kwargs_)
-                
-                n1_z, n2_z = k1_z.size, k2_z.size
-                
-                # Unpack and assign back to the correct redshift slice
-                pdw1[..., i] = pdw_z[:n1_z].reshape(k1_z.shape)
-                pdw2[..., i] = pdw_z[n1_z:n1_z+n2_z].reshape(k2_z.shape)
-                pdw3[..., i] = pdw_z[n1_z+n2_z:].reshape(k3_z.shape)
-        else:
-            k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
-            pdw_all = emu.Pdw(k_all, comet_params, mu=0.6, **kwargs)
-            
-            n1, n2 = k1_p.size, k2_p.size
-            pdw1 = pdw_all[:n1].reshape(k1_p.shape)
-            pdw2 = pdw_all[n1:n1+n2].reshape(k2_p.shape)
-            pdw3 = pdw_all[n1+n2:].reshape(k3_p.shape)
+        k_all_flat = np.concatenate([k1_p.ravel(), k2_p.ravel(), k3_p.ravel()])
+        kmin, kmax = k_all_flat.min(), k_all_flat.max()
+        kgrid = get_kvec_compression(kmin, kmax, 100)
+
+        #kwargs_ = kwargs.copy()
+        #kwargs_['de_model'] = 'w0wa'
+        pdw_grid = emu.Pdw(kgrid, comet_params, mu=0.6, **kwargs)  # shape (100, nz)
+
+        sort_idx = np.argsort(z_values)
+        ky = min(3, nz - 1)
+        biv_spl = RectBivariateSpline(kgrid, z_values[sort_idx], pdw_grid[:, sort_idx], kx=3, ky=ky, s=0)
+
+        z_bcast = np.broadcast_to(z_values, k1_p.shape)
+        pdw1 = biv_spl.ev(k1_p.ravel(), z_bcast.ravel()).reshape(k1_p.shape)
+        z_bcast = np.broadcast_to(z_values, k2_p.shape)
+        pdw2 = biv_spl.ev(k2_p.ravel(), z_bcast.ravel()).reshape(k2_p.shape)
+        z_bcast = np.broadcast_to(z_values, k3_p.shape)
+        pdw3 = biv_spl.ev(k3_p.ravel(), z_bcast.ravel()).reshape(k3_p.shape)
+
+    elif not use_pdw_interp:
+        k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
+        pdw_all = emu.Pdw(k_all, comet_params, mu=0.6, **kwargs)
+
+        n1, n2 = k1_p.size, k2_p.size
+        pdw1 = pdw_all[:n1].reshape(k1_p.shape)
+        pdw2 = pdw_all[n1:n1+n2].reshape(k2_p.shape)
+        pdw3 = pdw_all[n1+n2:].reshape(k3_p.shape)
     else:
         k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
         kmin, kmax = np.min(k_all), np.max(k_all)
-        
-        # Add a tiny buffer so we don't accidentally extrapolate at the boundaries
-        kgrid = get_kvec_compression(kmin * 0.99, kmax * 1.01, 100)
+        kgrid = get_kvec_compression(kmin, kmax, 100)
         pdw_grid = emu.Pdw(kgrid, comet_params, mu=0.6, **kwargs)
 
-        is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
-
-        if is_batched:
-            nz = pdw_grid.shape[1]
-            
-            # 1. Pre-allocate arrays to match the batched shape exactly
-            pdw1 = np.empty_like(k1_p)
-            pdw2 = np.empty_like(k2_p)
-            pdw3 = np.empty_like(k3_p)
-            
-            # 2. Evaluate redshift slices individually to avoid (N, nz, nz) explosion
-            for i in range(nz):
-                spline_z = make_interp_spline(kgrid, pdw_grid[:, i], k=3)
-                pdw1[..., i] = spline_z(k1_p[..., i])
-                pdw2[..., i] = spline_z(k2_p[..., i])
-                pdw3[..., i] = spline_z(k3_p[..., i])
-                
-        else:
-            # 1D unbatched case works exactly as you wrote it
-            spline = make_interp_spline(kgrid, pdw_grid, axis=0, k=3)
-            pdw1 = spline(k1_p)
-            pdw2 = spline(k2_p)
-            pdw3 = spline(k3_p)
+        spline = make_interp_spline(kgrid, pdw_grid, axis=0, k=3)
+        pdw1 = spline(k1_p)
+        pdw2 = spline(k2_p)
+        pdw3 = spline(k3_p)
     # else:
     #     k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
     #     kmin, kmax = np.min(k_all), np.max(k_all)
@@ -422,33 +379,27 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2
     #             res[ll] = np.column_stack(interpolated_z)
     if is_batched:
         nz = len(comet_params['z'])
+
+    if interpolate_k1k2:
+        deg = {'linear': 1, 'quadratic': 2, 'cubic': 3, 'quintic': 5}[k1k2_interp_method]
+        ng = interp_grid_size
+        W1 = make_interp_spline(k1_grid, np.eye(ng), k=deg)(interp_points[:, 0])  # (n_pts, ng)
+        W2 = make_interp_spline(k2_grid, np.eye(ng), k=deg)(interp_points[:, 1])  # (n_pts, ng)
+
+    if is_batched:
         bfull_flat = bfull.reshape(n, -1, nz)
         for ll in ell:
             res[ll] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[ll], optimize=True)
             if interpolate_k1k2:
-                n_points = interp_points.shape[0]
-                interpolated_batch = np.empty((n_points, nz))
-                degree_map = {'linear': 1, 'quadratic': 2, 'cubic': 3, 'quintic': 5}
-                
-                for iz in range(nz):
-                    grid_values = res[ll][:, iz].reshape(interp_grid_size, interp_grid_size) 
-                    interp_func = RectBivariateSpline(k1_grid, k2_grid, grid_values, kx=degree_map[k1k2_interp_method], ky=degree_map[k1k2_interp_method], s=0)
-                    interpolated_batch[:, iz] = interp_func.ev(interp_points[:, 0], interp_points[:, 1])
-                
-                # Reassign directly, no np.column_stack needed
-                res[ll] = interpolated_batch
+                vals = res[ll].reshape(ng, ng, nz)
+                res[ll] = np.einsum('pi,pj,ijn->pn', W1, W2, vals, optimize=True)
     else:
-        # Reshape bfull to (n, nmu1 * nmu12 * nphi) for a blazing fast BLAS matrix-vector product
         bfull_flat = bfull.reshape(n, -1)
         for ll in ell:
-            #res[ll] = bfull_flat @ proj_ops[ll]
             res[ll] = np.dot(bfull_flat, proj_ops[ll])
             if interpolate_k1k2:
-                degree_map = {'linear': 1, 'quadratic': 2, 'cubic': 3, 'quintic': 5}
-                grid_values = res[ll].reshape(interp_grid_size, interp_grid_size) 
-                interp_func = RectBivariateSpline(k1_grid, k2_grid, grid_values, kx=degree_map[k1k2_interp_method], ky=degree_map[k1k2_interp_method], s=0)
-                res[ll] = interp_func.ev(interp_points[:, 0], interp_points[:, 1])
-
+                vals = res[ll].reshape(ng, ng)
+                res[ll] = np.einsum('pi,pj,ij->p', W1, W2, vals, optimize=True)
 
     return res
 
@@ -599,57 +550,45 @@ def bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, use_pdw_interp=False
     k3_p, mu3_p = apply_ap(k3, mu3, qpar, qperp)
     # k1, k2, k3 are either arrays of any shape or floats
 
-    if not use_pdw_interp:
-        # Evaluate directly on a single concatenated block to reduce func call overhead.
+    if is_batched:
+        nz = len(comet_params['z'])
+        z_values = np.asarray(comet_params['z'], dtype=float)
+
+        k_all_flat = np.concatenate([k1_p.ravel(), k2_p.ravel(), k3_p.ravel()])
+        kmin, kmax = k_all_flat.min(), k_all_flat.max()
+        kgrid = get_kvec_compression(kmin, kmax, 100)
+
+        pdw_grid = emu.Pdw(kgrid, comet_params, mu=0.6, **kwargs)  # shape (100, nz)
+
+        sort_idx = np.argsort(z_values)
+        ky = min(3, nz - 1)
+        biv_spl = RectBivariateSpline(kgrid, z_values[sort_idx], pdw_grid[:, sort_idx], kx=3, ky=ky, s=0)
+
+        z_bcast = np.broadcast_to(z_values, k1_p.shape)
+        pdw1 = biv_spl.ev(k1_p.ravel(), z_bcast.ravel()).reshape(k1_p.shape)
+        z_bcast = np.broadcast_to(z_values, k2_p.shape)
+        pdw2 = biv_spl.ev(k2_p.ravel(), z_bcast.ravel()).reshape(k2_p.shape)
+        z_bcast = np.broadcast_to(z_values, k3_p.shape)
+        pdw3 = biv_spl.ev(k3_p.ravel(), z_bcast.ravel()).reshape(k3_p.shape)
+
+    elif not use_pdw_interp:
         k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
         pdw_all = emu.Pdw(k_all, comet_params, mu=0.6, **kwargs)
-        
-        n1, n2 = k1_p.size, k2_p.size
-        is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
 
-        if is_batched:
-            nz = len(comet_params['z'])
-            has_z_axis = (k1_p.shape[-1] == nz)
-            if has_z_axis:
-                p1 = pdw_all[:n1, :]
-                pdw1 = p1[np.arange(n1), np.arange(n1) % nz].reshape(k1_p.shape)
-                p2 = pdw_all[n1:n1+n2, :]
-                pdw2 = p2[np.arange(n2), np.arange(n2) % nz].reshape(k2_p.shape)
-                p3 = pdw_all[n1+n2:, :]
-                n3 = k3_p.size
-                pdw3 = p3[np.arange(n3), np.arange(n3) % nz].reshape(k3_p.shape)
-            else:
-                pdw1 = pdw_all[:n1, :].reshape(*k1_p.shape, nz)
-                pdw2 = pdw_all[n1:n1+n2, :].reshape(*k2_p.shape, nz)
-                pdw3 = pdw_all[n1+n2:, :].reshape(*k3_p.shape, nz)
-        else:
-            pdw1 = pdw_all[:n1].reshape(k1_p.shape)
-            pdw2 = pdw_all[n1:n1+n2].reshape(k2_p.shape)
-            pdw3 = pdw_all[n1+n2:].reshape(k3_p.shape)
+        n1, n2 = k1_p.size, k2_p.size
+        pdw1 = pdw_all[:n1].reshape(k1_p.shape)
+        pdw2 = pdw_all[n1:n1+n2].reshape(k2_p.shape)
+        pdw3 = pdw_all[n1+n2:].reshape(k3_p.shape)
     else:
         k_all = np.concatenate([np.ravel(k1_p), np.ravel(k2_p), np.ravel(k3_p)])
         kmin, kmax = np.min(k_all), np.max(k_all)
-        kgrid = np.logspace(np.log10(kmin*0.9), np.log10(kmax*1.1), 1000)
+        kgrid = get_kvec_compression(kmin, kmax, 100)
         pdw_grid = emu.Pdw(kgrid, comet_params, mu=0.6, **kwargs)
 
-        is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
-
-        if is_batched:
-            pdw_interp_list = [interp1d(kgrid, pdw_grid[:, j], axis=0, kind='cubic') for j in range(pdw_grid.shape[1])]
-            has_z_axis = (k1_p.shape[-1] == len(comet_params['z']))
-            if has_z_axis:
-                pdw1 = np.stack([pdw_interp_list[j](k1_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
-                pdw2 = np.stack([pdw_interp_list[j](k2_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
-                pdw3 = np.stack([pdw_interp_list[j](k3_p[..., j]) for j in range(pdw_grid.shape[1])], axis=-1)
-            else:
-                pdw1 = np.stack([pdw_interp_list[j](k1_p) for j in range(pdw_grid.shape[1])], axis=-1)
-                pdw2 = np.stack([pdw_interp_list[j](k2_p) for j in range(pdw_grid.shape[1])], axis=-1)
-                pdw3 = np.stack([pdw_interp_list[j](k3_p) for j in range(pdw_grid.shape[1])], axis=-1)
-        else:
-            pdw_interp = interp1d(kgrid, pdw_grid, axis=0, kind='cubic')
-            pdw1 = pdw_interp(k1_p)
-            pdw2 = pdw_interp(k2_p)
-            pdw3 = pdw_interp(k3_p)
+        spline = make_interp_spline(kgrid, pdw_grid, axis=0, k=3)
+        pdw1 = spline(k1_p)
+        pdw2 = spline(k2_p)
+        pdw3 = spline(k3_p)
 
     # Cache squares
     mu1_sq, mu2_sq, mu3_sq = mu1_p**2, mu2_p**2, mu3_p**2
@@ -845,27 +784,27 @@ def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, use_pdw_interp=Fals
     res = {}
     if is_batched:
         nz = len(comet_params['z'])
+
+    if interpolate_k1k2:
+        deg = {'linear': 1, 'quadratic': 2, 'cubic': 3, 'quintic': 5}[k1k2_interp_method]
+        ng = interp_grid_size
+        W1 = make_interp_spline(k1_grid, np.eye(ng), k=deg)(interp_points[:, 0])  # (n_pts, ng)
+        W2 = make_interp_spline(k2_grid, np.eye(ng), k=deg)(interp_points[:, 1])  # (n_pts, ng)
+
+    if is_batched:
         bfull_flat = bfull.reshape(n, -1, nz)
         for ll in ell:
             res[ll] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[ll], optimize=True)
             if interpolate_k1k2:
-                n_points = interp_points.shape[0]
-                interpolated_batch = np.zeros((n_points, nz))
-                degree_map = {'linear': 1, 'quadratic': 2, 'cubic': 3, 'quintic': 5}
-                for iz in range(nz):
-                    grid_vallues = res[ll][:, iz].reshape(interp_grid_size, interp_grid_size)
-                    interp_func = RectBivariateSpline(k1_grid, k2_grid, grid_vallues, kx=degree_map[k1k2_interp_method], ky=degree_map[k1k2_interp_method], s=0)
-                    interpolated_batch[:, iz] = interp_func.ev(interp_points[:, 0], interp_points[:, 1])
-                res[ll] = interpolated_batch
+                vals = res[ll].reshape(ng, ng, nz)
+                res[ll] = np.einsum('pi,pj,ijn->pn', W1, W2, vals, optimize=True)
     else:
         bfull_flat = bfull.reshape(n, -1)
         for ll in ell:
             res[ll] = np.dot(bfull_flat, proj_ops[ll])
             if interpolate_k1k2:
-                degree_map = {'linear': 1, 'quadratic': 2, 'cubic': 3, 'quintic': 5}
-                grid_vallues = res[ll].reshape(interp_grid_size, interp_grid_size)
-                interp_func = RectBivariateSpline(k1_grid, k2_grid, grid_vallues, kx=degree_map[k1k2_interp_method], ky=degree_map[k1k2_interp_method], s=0)
-                res[ll] = interp_func.ev(interp_points[:, 0], interp_points[:, 1])
+                vals = res[ll].reshape(ng, ng)
+                res[ll] = np.einsum('pi,pj,ij->p', W1, W2, vals, optimize=True)
 
     return res
 
