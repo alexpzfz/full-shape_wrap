@@ -5,6 +5,32 @@ from sympy.physics.wigner import wigner_3j
 from numba import njit
 
 einsum_opt = 'optimal' # 'greedy', True
+
+
+def _contract_proj(flat_vals, proj_op):
+    """Contract flattened angular axis with a BLAS-backed matrix multiply."""
+    if flat_vals.ndim == 2:
+        return flat_vals @ proj_op
+
+    n = flat_vals.shape[0]
+    nang = flat_vals.shape[1]
+    trailing = flat_vals.shape[2:]
+    view = np.moveaxis(flat_vals, 1, -1).reshape(-1, nang)
+    return (view @ proj_op).reshape((n, *trailing))
+
+
+def _interp_separable_2d(vals, W1, W2, ng):
+    """Evaluate separable 2D interpolation from a (ng, ng, ...) grid."""
+    npts = W1.shape[0]
+    trailing = vals.shape[2:]
+
+    tmp = W1 @ vals.reshape(ng, -1)
+    tmp = tmp.reshape(npts, ng, *trailing)
+
+    w2 = W2.reshape(npts, ng, *([1] * len(trailing)))
+    return np.sum(tmp * w2, axis=1)
+
+
 def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, use_pdw_interp=False, **kwargs):
     params = emu.params
     nbar = emu.nbar
@@ -267,7 +293,7 @@ def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, use_pdw_interp=False
     return bvdg
 
 
-@njit
+
 def tree_term(ki, kj, mui, muj, kk, muk, b1, b2, g2, f, Z1_i, Z1_j):
     muij = get_dot_cosine(ki, kj, kk)
     t = (2.0 * Z1_i) * Z1_j
@@ -275,7 +301,7 @@ def tree_term(ki, kj, mui, muj, kk, muk, b1, b2, g2, f, Z1_i, Z1_j):
     t = t * kernel_Z2(ki, kj, mui, muj, muij, kk, -muk, b1, b2, g2, f, Z1_i, Z1_j)
     return t
 
-@njit
+
 def stoch_term(kxmu_sq, mui_sq, b1, f, avir, sv, MB0, NP0, Z1_i):
     t = (b1 * MB0 + (f * NP0) * mui_sq) * Z1_i
     lambda2 = -f**2 * kxmu_sq
@@ -474,17 +500,19 @@ def bispectrum_sugiyama_proj(k1, k2, emu, comet_params, ell=[(0, 0, 0), (2, 0, 2
     if is_batched:
         bfull_flat = bfull.reshape(n, -1, nz)
         for ll in ell:
-            res[ll] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[ll], optimize=einsum_opt)
+            res_ll = _contract_proj(bfull_flat, proj_ops[ll])
             if interpolate_k1k2:
-                vals = res[ll].reshape(ng, ng, nz)
-                res[ll] = np.einsum('pi,pj,ijn->pn', W1, W2, vals, optimize=einsum_opt)
+                vals = res_ll.reshape(ng, ng, nz)
+                res_ll = _interp_separable_2d(vals, W1, W2, ng)
+            res[ll] = res_ll
     else:
         bfull_flat = bfull.reshape(n, -1)
         for ll in ell:
-            res[ll] = np.dot(bfull_flat, proj_ops[ll])
+            res_ll = _contract_proj(bfull_flat, proj_ops[ll])
             if interpolate_k1k2:
-                vals = res[ll].reshape(ng, ng)
-                res[ll] = np.einsum('pi,pj,ij->p', W1, W2, vals, optimize=einsum_opt)
+                vals = res_ll.reshape(ng, ng)
+                res_ll = _interp_separable_2d(vals, W1, W2, ng)
+            res[ll] = res_ll
 
     return res
 
@@ -884,6 +912,8 @@ def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, X_list, use_pdw_interp=False
         or (not isinstance(X_list, (list, tuple, np.ndarray)) and X_list == 'B_NB0')
     )
     has_x_axis = bfull.ndim == (6 if is_batched else 5)
+    x_labels = list(X_list) if isinstance(X_list, (list, tuple, np.ndarray)) else [X_list]
+    nb0_idx = np.array([i for i, x in enumerate(x_labels) if x == 'B_NB0'], dtype=int)
     
     if is_single_nb0:
         n_out = n_input if interpolate_k1k2 else k1.shape[0]
@@ -920,68 +950,104 @@ def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, X_list, use_pdw_interp=False
         if has_x_axis:
             nx = bfull.shape[-1]
             bfull_flat = bfull.reshape(n, -1, nz, nx)
+            use_nb0_fastpath = nb0_idx.size > 0
+            if use_nb0_fastpath:
+                non_nb0_idx = np.array([i for i in range(nx) if i not in set(nb0_idx.tolist())], dtype=int)
+                nb0_monopole = bfull[0, 0, 0, 0, :, nb0_idx]
         else:
             bfull_flat = bfull.reshape(n, -1, nz)
+            use_nb0_fastpath = False
         for ll in ell:
-            if has_x_axis:
-                res[ll] = np.einsum('ijkx,j->ikx', bfull_flat, proj_ops[ll], optimize=einsum_opt)
-            else:
-                res[ll] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[ll], optimize=einsum_opt)
-            if interpolate_k1k2:
-                if has_x_axis:
-                    vals = res[ll].reshape(ng, ng, nz, nx)
-                    res[ll] = np.einsum('pi,pj,ijnx->pnx', W1, W2, vals, optimize=einsum_opt)
+            if use_nb0_fastpath:
+                if non_nb0_idx.size > 0:
+                    res_non = _contract_proj(bfull_flat[..., non_nb0_idx], proj_ops[ll])
+                    if interpolate_k1k2:
+                        vals_non = res_non.reshape(ng, ng, nz, non_nb0_idx.size)
+                        res_non = _interp_separable_2d(vals_non, W1, W2, ng)
+                    n_out = res_non.shape[0]
+                    res_ll = np.zeros((n_out, nz, nx), dtype=res_non.dtype)
+                    res_ll[..., non_nb0_idx] = res_non
                 else:
-                    vals = res[ll].reshape(ng, ng, nz)
-                    res[ll] = np.einsum('pi,pj,ijn->pn', W1, W2, vals, optimize=einsum_opt)
+                    n_out = interp_points.shape[0] if interpolate_k1k2 else n
+                    res_ll = np.zeros((n_out, nz, nx), dtype=bfull.dtype)
+
+                if ll == (0, 0, 0):
+                    res_ll[..., nb0_idx] = nb0_monopole
+            else:
+                res_ll = _contract_proj(bfull_flat, proj_ops[ll])
+                if interpolate_k1k2:
+                    if has_x_axis:
+                        vals = res_ll.reshape(ng, ng, nz, nx)
+                    else:
+                        vals = res_ll.reshape(ng, ng, nz)
+                    res_ll = _interp_separable_2d(vals, W1, W2, ng)
+            res[ll] = res_ll
     else:
         if has_x_axis:
             nx = bfull.shape[-1]
             bfull_flat = bfull.reshape(n, -1, nx)
+            use_nb0_fastpath = nb0_idx.size > 0
+            if use_nb0_fastpath:
+                non_nb0_idx = np.array([i for i in range(nx) if i not in set(nb0_idx.tolist())], dtype=int)
+                nb0_monopole = bfull[0, 0, 0, 0, nb0_idx]
         else:
             bfull_flat = bfull.reshape(n, -1)
+            use_nb0_fastpath = False
         for ll in ell:
-            if has_x_axis:
-                res[ll] = np.einsum('ijx,j->ix', bfull_flat, proj_ops[ll], optimize=einsum_opt)
-            else:
-                res[ll] = np.dot(bfull_flat, proj_ops[ll])
-            if interpolate_k1k2:
-                if has_x_axis:
-                    vals = res[ll].reshape(ng, ng, nx)
-                    res[ll] = np.einsum('pi,pj,ijx->px', W1, W2, vals, optimize=einsum_opt)
+            if use_nb0_fastpath:
+                if non_nb0_idx.size > 0:
+                    res_non = _contract_proj(bfull_flat[..., non_nb0_idx], proj_ops[ll])
+                    if interpolate_k1k2:
+                        vals_non = res_non.reshape(ng, ng, non_nb0_idx.size)
+                        res_non = _interp_separable_2d(vals_non, W1, W2, ng)
+                    n_out = res_non.shape[0]
+                    res_ll = np.zeros((n_out, nx), dtype=res_non.dtype)
+                    res_ll[..., non_nb0_idx] = res_non
                 else:
-                    vals = res[ll].reshape(ng, ng)
-                    res[ll] = np.einsum('pi,pj,ij->p', W1, W2, vals, optimize=einsum_opt)
+                    n_out = interp_points.shape[0] if interpolate_k1k2 else n
+                    res_ll = np.zeros((n_out, nx), dtype=bfull.dtype)
+
+                if ll == (0, 0, 0):
+                    res_ll[..., nb0_idx] = nb0_monopole
+            else:
+                res_ll = _contract_proj(bfull_flat, proj_ops[ll])
+                if interpolate_k1k2:
+                    if has_x_axis:
+                        vals = res_ll.reshape(ng, ng, nx)
+                    else:
+                        vals = res_ll.reshape(ng, ng)
+                    res_ll = _interp_separable_2d(vals, W1, W2, ng)
+            res[ll] = res_ll
 
     return res
 
-@njit
+
 def kernel_Z1(mu, b1, f, mu_sq=None):
     if mu_sq is None:
         mu_sq = mu**2
     return b1 + f * mu_sq
-@njit
+
 def get_dot_cosine(k1, k2, k3):
     """Calculate (k1 . k2) / (|k1| |k2|) using the triangle condition"""
     return (k3**2 - k1**2 - k2**2) / (2 * k1 * k2)
 
-@njit
+
 def kernel_G2(k1, k2, mu12):
     return 3./7. + 4./7. * mu12**2 + 0.5 * (k1/k2 + k2/k1) * mu12
 
-@njit
+
 def kernel_F2(k1, k2, mu12):
     return 5./7. + 2./7. * mu12**2 + 0.5 * (k1/k2 + k2/k1) * mu12
 
-@njit
+
 def kernel_K(mu12):
     return mu12**2 -1.
 
-@njit
+
 def kernel_K2(k1, k2, mu12, b1, b2, g2):
     return b1 * kernel_F2(k1, k2, mu12) + b2/2. + g2 * kernel_K(mu12)
 
-@njit
+
 def kernel_Z2(k1, k2, mu1, mu2, mu12, k, mu, b1, b2, g2, f, Z1_1=None, Z1_2=None):
     # k = k3 = k1^2 + k2^2 - 2 k1 k2 mu12
     # mu = (k1 mu1 + k2 mu2) / k = -mu3
@@ -994,18 +1060,18 @@ def kernel_Z2(k1, k2, mu1, mu2, mu12, k, mu, b1, b2, g2, f, Z1_1=None, Z1_2=None
            f * mu**2 * kernel_G2(k1, k2, mu12) + \
            0.5 * f * k * mu * ((mu1/k1) * Z1_2 + (mu2/k2) * Z1_1)
 
-@njit
+
 def w_B_infty(lamb2, avir, sv):
     return 1./(1 - lamb2 * avir**2)**(3./2.) * \
           np.exp(lamb2 * sv**2/(1 - lamb2 * avir**2))
 
 def w_12_0_0():
     return 1.0
-@njit
+
 def w_12_infty_0(lamb2, avir, sv):
     return 1./(1 - lamb2 * avir**2)**(3./2.) * \
             np.exp(lamb2 * sv**2/(1 - lamb2 * avir**2)) 
-@njit
+
 def apply_ap(k, mu, qpar, qperp):
     # calculate real coordinates
     F = qpar / qperp

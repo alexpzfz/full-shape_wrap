@@ -456,7 +456,7 @@ class COMET(comet, BaseModel):
             
             bX_z = np.concatenate(bX_z, axis=0)
             if obs.xwin is not None:
-                bX_z = np.einsum('ij,jk->ik', obs.wmat, bX_z) if bX_z.ndim == 2 else obs.wmat @ bX_z
+                bX_z = np.einsum('ij,jk->ik', obs.wmat, bX_z, optimize='optimal') if bX_z.ndim == 2 else obs.wmat @ bX_z
             preds.append(bX_z)
             
         return preds
