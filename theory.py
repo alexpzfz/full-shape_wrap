@@ -230,7 +230,22 @@ class COMET(comet, BaseModel):
             
             for ll in ell:
                 idx = segment_indices[segment_idx]
-                pX_slice = pX_batched[f'ell{ll}'][idx, ..., iz] if is_batched else pX_batched[f'ell{ll}'][idx]
+                pX_arr = pX_batched[f'ell{ll}'][idx]
+                if is_batched:
+                    nz = len(params['z'])
+                    # Canonical shape is (n, nz, nX): keep trailing X after selecting z-bin.
+                    if pX_arr.ndim == 3 and pX_arr.shape[-2] == nz:
+                        pX_slice = pX_arr[:, iz, :]
+                    # Backward-compatible path for legacy (n, nX, nz).
+                    elif pX_arr.ndim == 3 and pX_arr.shape[-1] == nz:
+                        pX_slice = pX_arr[:, :, iz]
+                    # Legacy single-X squeezed case (n, nz): reintroduce trailing X axis.
+                    elif pX_arr.ndim == 2 and pX_arr.shape[-1] == nz:
+                        pX_slice = pX_arr[:, iz][:, None]
+                    else:
+                        raise ValueError(f"Unexpected PX shape for batched case: {pX_arr.shape}")
+                else:
+                    pX_slice = pX_arr if pX_arr.ndim == 2 else pX_arr[:, None]
                 pX_z.append(pX_slice)
                 segment_idx += 1
             
@@ -361,7 +376,7 @@ class COMET(comet, BaseModel):
 
         return preds
 
-    def predict_bispectrum_X_multipoles(self, observables, params, diagram, de_model):
+    def predict_bispectrum_X_multipoles(self, observables, params, X_list, de_model):
         cache_key = tuple(id(obs) for obs in observables)
         if not hasattr(self, '_bk_X_cache'):
             self._bk_X_cache = {}
@@ -403,9 +418,9 @@ class COMET(comet, BaseModel):
         
         # Evaluate model only at unique coordinates
         if is_scoccimarro:
-            bX_batched = self.BX_ell_scoccimarro(coord_all, params, ell_all, diagram, de_model=de_model)
+            bX_batched = self.BX_ell_scoccimarro(coord_all, params, ell_all, X_list, de_model=de_model)
         else:
-            bX_batched = self.BX_ell_sugiyama(coord_all, params, ell_all, diagram, de_model=de_model)
+            bX_batched = self.BX_ell_sugiyama(coord_all, params, ell_all, X_list, de_model=de_model)
         
         # Extract predictions for each observable
         preds = []
@@ -419,20 +434,36 @@ class COMET(comet, BaseModel):
             
             for ll in ell:
                 idx = segment_indices[segment_idx]
-                bX_slice = bX_batched[ll][idx]
+                bX_arr = bX_batched[ll][idx]
                 if is_batched:
-                    bX_slice = bX_slice[:, iz]
+                    nz = len(params['z'])
+                    # Canonical shape is (n, nz, nX): keep trailing X after selecting z-bin.
+                    if bX_arr.ndim == 3 and bX_arr.shape[-2] == nz:
+                        bX_slice = bX_arr[:, iz, :]
+                    # Backward-compatible path for legacy (n, nX, nz).
+                    elif bX_arr.ndim == 3 and bX_arr.shape[-1] == nz:
+                        bX_slice = bX_arr[:, :, iz]
+                    # Legacy single-X squeezed case (n, nz): reintroduce trailing X axis.
+                    elif bX_arr.ndim == 2 and bX_arr.shape[-1] == nz:
+                        bX_slice = bX_arr[:, iz][:, None]
+                    else:
+                        raise ValueError(f"Unexpected BX shape for batched case: {bX_arr.shape}")
+                else:
+                    # Keep trailing X axis in non-batched mode as well.
+                    bX_slice = bX_arr if bX_arr.ndim == 2 else bX_arr[:, None]
                 bX_z.append(bX_slice)
                 segment_idx += 1
             
-            bX_z = np.concatenate(bX_z)
+            bX_z = np.concatenate(bX_z, axis=0)
             if obs.xwin is not None:
-                bX_z = obs.wmat @ bX_z
+                bX_z = np.einsum('ij,jk->ik', obs.wmat, bX_z) if bX_z.ndim == 2 else obs.wmat @ bX_z
             preds.append(bX_z)
             
         return preds
 
-    def PX_ell_extra(self, k, params, ell, diagram, de_model):
+    def PX_ell_extra(self, k, params, ell, X_list, de_model):
+        if not isinstance(X_list, list):
+            X_list = [X_list] 
         if not isinstance(k, list):
             k_all = k
             k = len(ell) * [k]
@@ -458,13 +489,23 @@ class COMET(comet, BaseModel):
         kaiser_fact = (self.params['b1'] + self.params['f'] * mup**2)
         wdamping = self._W_kurt(kp, mup)
         res = {}
-        integrand = kaiser_fact * prefact_dict[diagram] * p2d * wdamping
+
+        terms = [kaiser_fact * prefact_dict[X] * p2d * wdamping for X in X_list]
+        integrand = np.stack(terms, axis=-1)  # (nk, nmu, nX) or (nk, nmu, nz, nX)
         legendre = eval_legendre.outer(ell, mu) # shape (n_ell, nmu)
-        r_ = 0.5 * np.einsum("ebc,db,b->dec", integrand, legendre,
-                                self.gl_weights) 
-        is_batched = isinstance(params.get('z'), (list, np.ndarray)) and len(params['z']) > 1
+        if integrand.ndim == 3:
+            # integrand shape: (nk, nmu, nX)
+            r_ = 0.5 * np.einsum("kmx,lm,m->lkx", integrand, legendre, self.gl_weights)
+        else:
+            # integrand shape: (nk, nmu, nz, nX)
+            r_ = 0.5 * np.einsum("kmzx,lm,m->lkzx", integrand, legendre, self.gl_weights)
         for i, ll in enumerate(ell):
-            res[f'ell{ll}'] = (2 * ll + 1)/q3 * (r_[i] if is_batched else r_[i, :, 0])
+            # Always keep trailing X axis: (nk, nX) or (nk, nz, nX).
+            if r_[i].ndim == 3:
+                q3_norm = np.asarray(q3)[None, :, None]
+            else:
+                q3_norm = q3
+            res[f'ell{ll}'] = (2 * ll + 1) * r_[i] / q3_norm
             if idx_inverse is not None:
                 res[f'ell{ll}'] = res[f'ell{ll}'][idx_inverse][idx_ell[i]:idx_ell[i]+len(k[i])]
         return res
@@ -506,7 +547,7 @@ class COMET(comet, BaseModel):
             res[ll] = bsugi[ll][idx_inverse][idx_ell[i]:idx_ell[i+1]] if idx_inverse is not None else bsugi[ll]
         return res
 
-    def BX_ell_scoccimarro(self, tri, params, ell, diagram, de_model):
+    def BX_ell_scoccimarro(self, tri, params, ell, X_list, de_model):
         if not isinstance(tri, list):
             tri_all = tri
             tri = len(ell) * [tri]
@@ -517,13 +558,13 @@ class COMET(comet, BaseModel):
             tri_all, idx_inverse = np.unique(tri_all, axis=0, return_inverse=True) 
             idx_ell = [np.sum([len(t) for t in tri[:i]]) for i in range(len(tri)+1)] # idx_ell[i] is the starting index of tri[i] in tri_all
         k1, k2, k3 = tri_all[:, 0], tri_all[:, 1], tri_all[:, 2]
-        bX_scocc = bX_ell_scoccimarro(k1, k2, k3, self, params, ell=ell, diagram=diagram, de_model=de_model, **self.bispec_kwargs['soccimarro']) #shape (ntri, n_ell)
+        bX_scocc = bX_ell_scoccimarro(k1, k2, k3, self, params, ell=ell, X_list=X_list, de_model=de_model, **self.bispec_kwargs['soccimarro']) #shape (ntri, n_ell)
         res = {}
         for i, ll in enumerate(ell):
             res[ll] = bX_scocc[ll][idx_inverse][idx_ell[i]:idx_ell[i]+len(tri[i])] if idx_inverse is not None else bX_scocc[ll]
         return res
     
-    def BX_ell_sugiyama(self, pair, params, ell, diagram, de_model):
+    def BX_ell_sugiyama(self, pair, params, ell, X_list, de_model):
         if not isinstance(pair, list):
             pair_all = pair
             pair = len(ell) * [pair]
@@ -533,7 +574,7 @@ class COMET(comet, BaseModel):
             pair_all, idx_inverse = np.unique(pair_all, axis=0, return_inverse=True) 
             idx_ell = [int(np.sum([len(p) for p in pair[:i]])) for i in range(len(pair)+1)]
         k1, k2 = pair_all[:, 0], pair_all[:, 1] 
-        bX_sugi = bX_ell_sugiyama(k1, k2, self, params, ell=ell, diagram=diagram, de_model=de_model, **self.bispec_kwargs['sugiyama']) #shape (npair, n_ell)
+        bX_sugi = bX_ell_sugiyama(k1, k2, self, params, ell=ell, X_list=X_list, de_model=de_model, **self.bispec_kwargs['sugiyama']) #shape (npair, n_ell)
         res = {}
         for i, ll in enumerate(ell):
             res[ll] = bX_sugi[ll][idx_inverse][idx_ell[i]:idx_ell[i+1]] if idx_inverse is not None else bX_sugi[ll]

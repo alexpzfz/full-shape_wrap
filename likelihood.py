@@ -284,34 +284,60 @@ class Likelihood:
         if cache is None:
             cache = {}
 
-        for i, param in enumerate(am_params_iz):
-            base_name = _base_param_name(param)
-            if '_r_' in param or param.endswith('_r'):
-                factor = self.params.get_reparam_factor(params, param)
-            else:
-                factor = 1.0
+        # Build per-parameter metadata and a unique diagram list for a single emulator call.
+        param_info = []
+        diag_list = []
+        diag_to_col = {}
 
-            if base_name not in ['a0', 'a2', 'a4']: 
+        def _as_diag_group(diag):
+            return list(diag) if isinstance(diag, (list, tuple)) else [diag]
+
+        for param in am_params_iz:
+            base_name = _base_param_name(param)
+            factor = self.params.get_reparam_factor(params, param) if ('_r_' in param or param.endswith('_r')) else 1.0
+
+            if base_name not in ['a0', 'a2', 'a4']:
                 diag_to_marg = self.emu.diagrams_to_marg[base_name]
-                bx = self.emu._get_bias_coeff_for_AM(diag_to_marg)   
-                bx = bx * factor# Apply reparametrization factor if needed
+                bx = self.emu._get_bias_coeff_for_AM(diag_to_marg)
+                bx = bx * factor
                 if len(self.z_list) > 1:
-                    bx = bx[..., iz] # Get the bias coefficient for the correct redshift bin
+                    bx = bx[..., iz]
             else:
                 diag_to_marg = self.emu._extra_diagrams_to_marg[base_name]
-                bx = factor # Apply reparametrization factor if needed
-            
-            if base_name not in cache:
-                pk_observables = [obs.observables[0] if obs.__class__.__name__ == 'JointObservable' else obs for obs in self.observables]
-                cache[base_name] = self.emu.predict_power_spectrum_X_multipoles(pk_observables, comet_params, diag_to_marg, de_model=self.de_model)
-            px_ell = cache[base_name][iz]
+                bx = factor
 
-            nx = px_ell.ndim
-            if nx == 1:
-                m_vec = bx * px_ell
-            elif nx > 1:
-                m_vec = np.sum(bx * px_ell, axis=1)
-            design_mat[:, i] = m_vec
+            diag_group = _as_diag_group(diag_to_marg)
+            for diag_name in diag_group:
+                if diag_name not in diag_to_col:
+                    diag_to_col[diag_name] = len(diag_list)
+                    diag_list.append(diag_name)
+
+            param_info.append((diag_group, bx))
+
+        cache_key = ('pk_X_multi', tuple(diag_list))
+        if cache_key not in cache:
+            pk_observables = [obs.observables[0] if obs.__class__.__name__ == 'JointObservable' else obs for obs in self.observables]
+            cache[cache_key] = self.emu.predict_power_spectrum_X_multipoles(
+                pk_observables,
+                comet_params,
+                diag_list,
+                de_model=self.de_model,
+            )
+
+        px_ell_all = cache[cache_key][iz]
+
+        for i, (diag_group, bx) in enumerate(param_info):
+            if px_ell_all.ndim == 1:
+                px_sel = px_ell_all[:, None]
+            else:
+                cols = [diag_to_col[d] for d in diag_group]
+                px_sel = px_ell_all[:, cols]
+
+            if px_sel.ndim == 1:
+                m_vec = bx * px_sel
+            else:
+                m_vec = np.sum(bx * px_sel, axis=1)
+            design_mat[:, i] = np.ravel(m_vec)
         # if not np.all(np.isfinite(design_mat)):
         #     bad = np.size(design_mat) - np.count_nonzero(np.isfinite(design_mat))
         #     raise FloatingPointError(f"PK design matrix contains non-finite entries (bad={bad}, params={comet_params}).")
@@ -334,22 +360,40 @@ class Likelihood:
         design_mat = np.zeros((observable.n_data, len(am_params_iz)))
         if cache is None:
             cache = {}
-    
-        for i, param in enumerate(am_params_iz):
-            base_name = _base_param_name(param)
-            if '_r_' in param or param.endswith('_r'):
-                factor = self.params.get_reparam_factor(params, param)
-            else:
-                factor = 1.0
 
+        param_info = []
+        diag_list = []
+        diag_to_col = {}
+
+        for param in am_params_iz:
+            base_name = _base_param_name(param)
+            factor = self.params.get_reparam_factor(params, param) if ('_r_' in param or param.endswith('_r')) else 1.0
             diag_to_marg = 'B_' + base_name
-            
-            if diag_to_marg not in cache:
-                bk_observables = [obs.observables[1] if obs.__class__.__name__ == 'JointObservable' else obs for obs in self.observables]
-                cache[diag_to_marg] = self.emu.predict_bispectrum_X_multipoles(bk_observables, comet_params, diag_to_marg, de_model=self.de_model)
-            
-            m_vec = factor * cache[diag_to_marg][iz]
-            design_mat[:, i] = m_vec
+
+            if diag_to_marg not in diag_to_col:
+                diag_to_col[diag_to_marg] = len(diag_list)
+                diag_list.append(diag_to_marg)
+
+            param_info.append((diag_to_marg, factor))
+
+        cache_key = ('bk_X_multi', tuple(diag_list))
+        if cache_key not in cache:
+            bk_observables = [obs.observables[1] if obs.__class__.__name__ == 'JointObservable' else obs for obs in self.observables]
+            cache[cache_key] = self.emu.predict_bispectrum_X_multipoles(
+                bk_observables,
+                comet_params,
+                diag_list,
+                de_model=self.de_model,
+            )
+
+        bx_ell_all = cache[cache_key][iz]
+
+        for i, (diag_to_marg, factor) in enumerate(param_info):
+            if bx_ell_all.ndim == 1:
+                bx_col = bx_ell_all
+            else:
+                bx_col = bx_ell_all[:, diag_to_col[diag_to_marg]]
+            design_mat[:, i] = np.ravel(factor * bx_col)
             
         return design_mat
 

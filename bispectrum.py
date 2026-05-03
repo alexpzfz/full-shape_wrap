@@ -233,10 +233,14 @@ def bispectrum_vdg(k1, k2, k3, mu1, mu2, emu, comet_params, use_pdw_interp=False
     kxmu1_sq = (k1_p**2) * mu1_sq
     kxmu2_sq = (k2_p**2) * mu2_sq
     kxmu3_sq = (k3_p**2) * mu3_sq
-
-    bstoch = stoch_term(kxmu1_sq, mu1_sq, b1, f, avir, sv, MB0, NP0, Z1_1) * pdw1 +\
-             stoch_term(kxmu2_sq, mu2_sq, b1, f, avir, sv, MB0, NP0, Z1_2) * pdw2 +\
-             stoch_term(kxmu3_sq, mu3_sq, b1, f, avir, sv, MB0, NP0, Z1_3) * pdw3
+    
+    # avoid call if MB0=NP0=0 (useful for AM)
+    if np.all(MB0 == 0) and np.all(NP0 == 0):
+        bstoch = np.zeros_like(btree)
+    else:
+        bstoch = stoch_term(kxmu1_sq, mu1_sq, b1, f, avir, sv, MB0, NP0, Z1_1) * pdw1 +\
+                stoch_term(kxmu2_sq, mu2_sq, b1, f, avir, sv, MB0, NP0, Z1_2) * pdw2 +\
+                stoch_term(kxmu3_sq, mu3_sq, b1, f, avir, sv, MB0, NP0, Z1_3) * pdw3
     # bstoch = bstoch * pdw1
     
     # s2 = stoch_term(kxmu2_sq, mu2_sq, b1, f, avir, sv, MB0, NP0, Z1_2)
@@ -602,24 +606,36 @@ def get_cached_proj_operator_alt(nmu1, nmu2, nphi12, ell, w_mu1, w_mu2, w_phi12,
     _PROJ_CACHE_ALT[cache_key] = res_ops
     return res_ops
 
-def bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, use_pdw_interp=False, **kwargs):
+def bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, X_list, use_pdw_interp=False, **kwargs):
+    if not isinstance(X_list, (list, tuple)):
+        X_list = [X_list]
     # only supporting NP0, NB0 and MB0\
     params = emu.params
     nbar = emu.nbar
     b1, f, avir, sv = params['b1'], params['f'], params['avir'], params['sv']
     qpar, qperp = params['q_lo'], params['q_tr']
     qiso6 = qpar**2 * qperp**4
-    if diagram == 'B_NP0':
-        NP0, MB0, NB0 = 1, 0, 0
-    elif diagram == 'B_MB0':
-        NP0, MB0, NB0 = 0, 1, 0
-    elif diagram == 'B_NB0':
+
+    if len(X_list) == 1 and X_list[0] == 'B_NB0':
         bstoch = np.ones_like(k1) * np.ones_like(mu1) * np.ones_like(mu2)
         if isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1:
             bstoch = bstoch[..., None]
         btosch = bstoch / (qiso6 * nbar**2)
+ 
         return btosch
-     
+    
+    # for diagram in diagrams:
+    # if diagram == 'B_NP0':
+    #     NP0, MB0, NB0 = 1, 0, 0
+    # elif diagram == 'B_MB0':
+    #     NP0, MB0, NB0 = 0, 1, 0
+    # elif diagram == 'B_NB0':
+    #     bstoch = np.ones_like(k1) * np.ones_like(mu1) * np.ones_like(mu2)
+    #     if isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1:
+    #         bstoch = bstoch[..., None]
+    #     btosch = bstoch / (qiso6 * nbar**2)
+    #     return btosch
+         
     is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
     if is_batched:
         k1, k2, k3 = k1[..., None], k2[..., None], k3[..., None]
@@ -678,22 +694,29 @@ def bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, use_pdw_interp=False
     kxmu2_sq = (k2_p**2) * mu2_sq
     kxmu3_sq = (k3_p**2) * mu3_sq
 
-    bstoch = stoch_term(kxmu1_sq, mu1_sq, b1, f, avir, sv, MB0, NP0, Z1_1)
-    bstoch = bstoch * pdw1
-    
-    s2 = stoch_term(kxmu2_sq, mu2_sq, b1, f, avir, sv, MB0, NP0, Z1_2)
-    s2 = s2 * pdw2
-    bstoch = bstoch + s2
-    
-    s3 = stoch_term(kxmu3_sq, mu3_sq, b1, f, avir, sv, MB0, NP0, Z1_3)
-    s3 = s3 * pdw3
-    bstoch = bstoch + s3
+    res = []
+    for X in X_list:
+        if X == 'B_NP0':
+            NP0, MB0, NB0 = 1, 0, 0
+        elif X == 'B_MB0':
+            NP0, MB0, NB0 = 0, 1, 0
+        elif X == 'B_NB0':
+            bstoch = np.ones_like(k1) * np.ones_like(mu1) * np.ones_like(mu2)
+            if is_batched:
+                bstoch = bstoch[..., None]
+            btosch = bstoch / (qiso6 * nbar**2)
+            res.append(btosch)
+            continue
 
-    bstoch = bstoch * (1.0 / nbar)
-    bstoch = bstoch / qiso6
-    return bstoch
+        bstoch = stoch_term(kxmu1_sq, mu1_sq, b1, f, avir, sv, MB0, NP0, Z1_1)* pdw1 + \
+                 stoch_term(kxmu2_sq, mu2_sq, b1, f, avir, sv, MB0, NP0, Z1_2)* pdw2 + \
+                 stoch_term(kxmu3_sq, mu3_sq, b1, f, avir, sv, MB0, NP0, Z1_3)* pdw3
+        bstoch *= (1.0 / nbar)
+        bstoch /= qiso6
+        res.append(bstoch)
+    return np.stack(res, axis=-1) if len(res) > 1 else res[0]
 
-def bX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
+def bX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, X_list, **kwargs):
     nmu, nphi = kwargs.pop('nmu', 20), kwargs.pop('nphi', 20)
     mu, w_mu = np.polynomial.legendre.leggauss(nmu)
     phi = np.linspace(0, 2*np.pi, nphi, endpoint=False)
@@ -705,11 +728,16 @@ def bX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
     k3 = np.sqrt(k1**2 + k2**2 + 2 * k1 * k2 * mu12)
     mu12 = np.clip(mu12, -1, 1)
     mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * np.cos(phi)
-    bfull = bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram, **kwargs) # shape (ntri, nmu, nphi)
+    bfull = bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, X_list, **kwargs) # shape (ntri, nmu, nphi)
     
     is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
+    is_single_nb0 = (
+        (isinstance(X_list, (list, tuple, np.ndarray)) and len(X_list) == 1 and X_list[0] == 'B_NB0')
+        or (not isinstance(X_list, (list, tuple, np.ndarray)) and X_list == 'B_NB0')
+    )
+    has_x_axis = bfull.ndim == (5 if is_batched else 4)
     
-    if diagram == 'B_NB0':
+    if is_single_nb0:
         if is_batched:
             b0 = np.ones((k1.shape[0], len(comet_params['z']))) * bfull[0, 0, 0, :]
         else:
@@ -720,9 +748,17 @@ def bX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
     n = k1.shape[0]
     if is_batched:
         nz = len(comet_params['z'])
-        bfull_flat = bfull.reshape(n, -1, nz)
+        if has_x_axis:
+            nx = bfull.shape[-1]
+            bfull_flat = bfull.reshape(n, -1, nz, nx)
+        else:
+            bfull_flat = bfull.reshape(n, -1, nz)
     else:
-        bfull_flat = bfull.reshape(n, -1)
+        if has_x_axis:
+            nx = bfull.shape[-1]
+            bfull_flat = bfull.reshape(n, -1, nx)
+        else:
+            bfull_flat = bfull.reshape(n, -1)
 
     res = {}
     for ll in ell:
@@ -733,16 +769,22 @@ def bX_ell_scoccimarro(k1, k2, k3, emu, comet_params, ell, diagram, **kwargs):
         proj_op = (ylm * weights).ravel()
             
         if is_batched:
-            integral = np.einsum('ijk,j->ik', bfull_flat, proj_op, optimize=einsum_opt)
+            if has_x_axis:
+                integral = np.einsum('ijkx,j->ikx', bfull_flat, proj_op, optimize=einsum_opt)
+            else:
+                integral = np.einsum('ijk,j->ik', bfull_flat, proj_op, optimize=einsum_opt)
         else:
-            integral = np.dot(bfull_flat, proj_op)
+            if has_x_axis:
+                integral = np.einsum('ijx,j->ix', bfull_flat, proj_op, optimize=einsum_opt)
+            else:
+                integral = np.dot(bfull_flat, proj_op)
             
-        bell = (2*ll + 1) * integral / (4 * np.pi)
+        bell = (2*l + 1) * integral / (4 * np.pi)
         res[ll] = bell
     return res
 
 
-def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, use_pdw_interp=False, 
+def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, X_list, use_pdw_interp=False, 
                     interpolate_k1k2=False, **kwargs):
     n = k1.shape[0]
     nmu1 = kwargs.pop('nmu1', 5) # cos(\omega)
@@ -833,12 +875,17 @@ def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, use_pdw_interp=Fals
     # get mu2 using the Scoccimarro coordinate system
     mu2 = mu12 * mu1 + np.sqrt(1 - mu12**2) * np.sqrt(1 - mu1**2) * cphi # shape (n, nmu1, nmu12, nphi)
     
-    bfull = bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, diagram=diagram,
+    bfull = bX_5d(k1, k2, k3, mu1, mu2, emu, comet_params, X_list=X_list,
                   use_pdw_interp=use_pdw_interp, **kwargs) # shape (n, nmu1, nmu12, nphi)
                   
     is_batched = isinstance(comet_params.get('z'), (list, np.ndarray)) and len(comet_params['z']) > 1
+    is_single_nb0 = (
+        (isinstance(X_list, (list, tuple, np.ndarray)) and len(X_list) == 1 and X_list[0] == 'B_NB0')
+        or (not isinstance(X_list, (list, tuple, np.ndarray)) and X_list == 'B_NB0')
+    )
+    has_x_axis = bfull.ndim == (6 if is_batched else 5)
     
-    if diagram == 'B_NB0':
+    if is_single_nb0:
         n_out = n_input if interpolate_k1k2 else k1.shape[0]
         if is_batched:
             b0 = np.ones((n_out, len(comet_params['z']))) * bfull[0, 0, 0, 0, :]
@@ -870,19 +917,41 @@ def bX_ell_sugiyama(k1, k2, emu, comet_params, ell, diagram, use_pdw_interp=Fals
         W2 = make_interp_spline(k2_grid, np.eye(ng), k=deg)(interp_points[:, 1])  # (n_pts, ng)
 
     if is_batched:
-        bfull_flat = bfull.reshape(n, -1, nz)
+        if has_x_axis:
+            nx = bfull.shape[-1]
+            bfull_flat = bfull.reshape(n, -1, nz, nx)
+        else:
+            bfull_flat = bfull.reshape(n, -1, nz)
         for ll in ell:
-            res[ll] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[ll], optimize=einsum_opt)
+            if has_x_axis:
+                res[ll] = np.einsum('ijkx,j->ikx', bfull_flat, proj_ops[ll], optimize=einsum_opt)
+            else:
+                res[ll] = np.einsum('ijk,j->ik', bfull_flat, proj_ops[ll], optimize=einsum_opt)
             if interpolate_k1k2:
-                vals = res[ll].reshape(ng, ng, nz)
-                res[ll] = np.einsum('pi,pj,ijn->pn', W1, W2, vals, optimize=einsum_opt)
+                if has_x_axis:
+                    vals = res[ll].reshape(ng, ng, nz, nx)
+                    res[ll] = np.einsum('pi,pj,ijnx->pnx', W1, W2, vals, optimize=einsum_opt)
+                else:
+                    vals = res[ll].reshape(ng, ng, nz)
+                    res[ll] = np.einsum('pi,pj,ijn->pn', W1, W2, vals, optimize=einsum_opt)
     else:
-        bfull_flat = bfull.reshape(n, -1)
+        if has_x_axis:
+            nx = bfull.shape[-1]
+            bfull_flat = bfull.reshape(n, -1, nx)
+        else:
+            bfull_flat = bfull.reshape(n, -1)
         for ll in ell:
-            res[ll] = np.dot(bfull_flat, proj_ops[ll])
+            if has_x_axis:
+                res[ll] = np.einsum('ijx,j->ix', bfull_flat, proj_ops[ll], optimize=einsum_opt)
+            else:
+                res[ll] = np.dot(bfull_flat, proj_ops[ll])
             if interpolate_k1k2:
-                vals = res[ll].reshape(ng, ng)
-                res[ll] = np.einsum('pi,pj,ij->p', W1, W2, vals, optimize=einsum_opt)
+                if has_x_axis:
+                    vals = res[ll].reshape(ng, ng, nx)
+                    res[ll] = np.einsum('pi,pj,ijx->px', W1, W2, vals, optimize=einsum_opt)
+                else:
+                    vals = res[ll].reshape(ng, ng)
+                    res[ll] = np.einsum('pi,pj,ij->p', W1, W2, vals, optimize=einsum_opt)
 
     return res
 
