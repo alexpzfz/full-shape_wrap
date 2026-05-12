@@ -456,11 +456,23 @@ class Params:
             factor *= self.sigmaR_ref[iz]**2 / p[f'sigma_12{s_iz}']**2
         return factor
 
-    def _reparam_stochastic_factor(self, p, iz=0):
+    # def _reparam_stochastic_factor(self, p, iz=0):
+    #     factor = 1.0
+    #     s_iz = f"_{iz}" if self.nz > 1 else ""
+    #     if 'ap' in self.reparam_stochastic_mode:
+    #         factor *= p[f'q_iso3{s_iz}']
+    #     return factor
+
+    def _reparam_stochastic_factor(self, p, name, iz=0):
         factor = 1.0
         s_iz = f"_{iz}" if self.nz > 1 else ""
         if 'ap' in self.reparam_stochastic_mode:
-            factor *= p[f'q_iso3{s_iz}']
+            if name == f'NB0_r{s_iz}':
+                factor *= p[f'q_iso3{s_iz}']**2
+            # elif name == f'MB0_r{s_iz}':
+            #     factor *= p[f'q_iso3{s_iz}']**(3/2)
+            else:
+                factor *= p[f'q_iso3{s_iz}']
         return factor
         
     def get_reparam_factor(self, p, name):
@@ -479,7 +491,7 @@ class Params:
         elif base_name_iz in self.counterterm_params:
             return self._reparam_counterterm_factor(p, iz=iz)
         elif base_name_iz in self.stochastic_params:
-            return self._reparam_stochastic_factor(p, iz=iz)
+            return self._reparam_stochastic_factor(p, name, iz=iz)
         else:
             return None
     
