@@ -117,7 +117,7 @@ class Params:
                     suffixed_name = f"{name}_{iz}"
                     if name == "bG2": self.set_derived_param(suffixed_name, partial(self.bG2_coev, iz=iz))
                     elif name == "bGam3": self.set_derived_param(suffixed_name, partial(self.bGam3_coev, iz=iz))
-                    elif name == "bK2" or name == "bK2t": self.set_derived_param(suffixed_name, partial(self.bK2_coev, iz=iz))
+                    elif name == "bk2" or name == "bK2t": self.set_derived_param(suffixed_name, partial(self.bK2_coev, iz=iz))
                     elif name == "btd" or name == "btdt": self.set_derived_param(suffixed_name, partial(self.btd_coev, iz=iz))
                     else:
                         raise ValueError(f"Co-evolution for {name} not implemented.")
@@ -439,7 +439,7 @@ class Params:
 
         if name == f'b1_r{s_iz}':
             return factor_sigmaR * factor_ap
-        if name in [f'b2_r{s_iz}', f'b2t_r{s_iz}', f'g2_r{s_iz}', f'bK2_r{s_iz}', f'bG2_r{s_iz}']:
+        if name in [f'b2_r{s_iz}', f'b2t_r{s_iz}', f'b2d_r{s_iz}', f'g2_r{s_iz}', f'bk2_r{s_iz}', f'bG2_r{s_iz}']:
             return factor_sigmaR**2 * factor_ap
         if name in [f'g21_r{s_iz}', f'bGam3_r{s_iz}', f'btd_r{s_iz}']:
             if self.reparam_3ordbias_power == 3.0:
