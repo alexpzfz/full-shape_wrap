@@ -333,27 +333,37 @@ class Likelihood:
         full_observable = self.observables[iz]
         observable = full_observable.observables[1] if full_observable.__class__.__name__ == 'JointObservable' else full_observable
 
-        comet_params = self.params.get_comet_dict(params)
         design_mat = np.zeros((observable.n_data, len(am_params_iz)))
         if cache is None:
             cache = {}
-    
+        if not am_params_iz:
+            return design_mat
+
+        # Collect the AM diagram labels needed across all params, preserving order
+        # and dropping ones already cached. One BX call serves the whole set.
+        diags_needed = []
+        seen = set()
+        for param in am_params_iz:
+            diag = 'B_' + _base_param_name(param)
+            if diag in seen or diag in cache:
+                continue
+            seen.add(diag)
+            diags_needed.append(diag)
+
+        if diags_needed:
+            comet_params = self.params.get_comet_dict(params)
+            bk_observables = [obs.observables[1] if obs.__class__.__name__ == 'JointObservable' else obs for obs in self.observables]
+            cache.update(self.emu.predict_bispectrum_X_multipoles_batch(
+                bk_observables, comet_params, diags_needed, de_model=self.de_model))
+
         for i, param in enumerate(am_params_iz):
             base_name = _base_param_name(param)
             if '_r_' in param or param.endswith('_r'):
                 factor = self.params.get_reparam_factor(params, param)
             else:
                 factor = 1.0
+            design_mat[:, i] = factor * cache['B_' + base_name][iz]
 
-            diag_to_marg = 'B_' + base_name
-            
-            if diag_to_marg not in cache:
-                bk_observables = [obs.observables[1] if obs.__class__.__name__ == 'JointObservable' else obs for obs in self.observables]
-                cache[diag_to_marg] = self.emu.predict_bispectrum_X_multipoles(bk_observables, comet_params, diag_to_marg, de_model=self.de_model)
-            
-            m_vec = factor * cache[diag_to_marg][iz]
-            design_mat[:, i] = m_vec
-            
         return design_mat
 
     def join_design_matrices(self, dm_pk, dm_bk, iz):

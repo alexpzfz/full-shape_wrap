@@ -361,75 +361,116 @@ class COMET(comet, BaseModel):
         return preds
 
     def predict_bispectrum_X_multipoles(self, observables, params, diagram, de_model):
+        """Back-compat single-label shim around `predict_bispectrum_X_multipoles_batch`."""
+        return self.predict_bispectrum_X_multipoles_batch(
+            observables, params, [diagram], de_model)[diagram]
+
+    def predict_bispectrum_X_multipoles_batch(self, observables, params, am_diagrams, de_model):
+        """Evaluate multiple AM bispectrum design-matrix contributions in one shot.
+
+        Each entry in `am_diagrams` (e.g. 'B_NP0', 'B_MB0', 'B_NB0') maps via
+        `_native_bx_recipe` to a list of native Bnoise_* kernels plus a combine
+        closure. We take the *union* of those kernels, run a single
+        `BX_ell_Scocc`/`BX_ell_Sugi` call (the expensive 5D bispectrum eval
+        happens once), then slice + combine per label.
+
+        Returns ``{label: [pred_per_obs_array]}`` matching the single-label
+        method's per-observable shape.
+        """
+        if not am_diagrams:
+            return {}
+        if not observables:
+            return {d: [] for d in am_diagrams}
+
         cache_key = tuple(id(obs) for obs in observables)
         if not hasattr(self, '_bk_X_cache'):
             self._bk_X_cache = {}
-            
+
         if cache_key not in self._bk_X_cache:
-            ell_all = list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)])) 
+            ell_all = list(set([ll for obs in observables for ll in (obs.ellwin if obs.ellwin is not None else obs.ell)]))
             is_scoccimarro = hasattr(observables[0], 'tri')
-            
-            # Collect coordinate segments (tri or pair)
+
             coord_segments = []
             if is_scoccimarro:
                 for obs_idx, obs in enumerate(observables):
                     tri = obs.tri if obs.xwin is None else obs.triwin
                     ell = obs.ell if obs.ellwin is None else obs.ellwin
                     for ell_idx, tri_ell in enumerate(tri):
-                        coord_segments.append((tri_ell, obs_idx, ell_idx, True))  # True = scoccimarro
+                        coord_segments.append((tri_ell, obs_idx, ell_idx, True))
             else:
                 for obs_idx, obs in enumerate(observables):
                     pair = obs.pair if obs.xwin is None else obs.pairwin
                     ell = obs.ell if obs.ellwin is None else obs.ellwin
                     for ell_idx, pair_ell in enumerate(pair):
-                        coord_segments.append((pair_ell, obs_idx, ell_idx, False))  # False = sugiyama
-            
-            # Get unique coordinates and inverse indices
+                        coord_segments.append((pair_ell, obs_idx, ell_idx, False))
+
             coord_all_concat = np.concatenate([seg[0] for seg in coord_segments])
             coord_all, inverse_indices = np.unique(coord_all_concat, axis=0, return_inverse=True)
-            
-            # Map inverse indices back to each segment
+
             inverse_idx_offset = 0
             segment_indices = []
             for coord_ell, _, _, _ in coord_segments:
                 n_coord = len(coord_ell)
                 segment_indices.append(inverse_indices[inverse_idx_offset:inverse_idx_offset + n_coord])
                 inverse_idx_offset += n_coord
-                
+
             self._bk_X_cache[cache_key] = (ell_all, is_scoccimarro, coord_all, segment_indices)
-            
+
         ell_all, is_scoccimarro, coord_all, segment_indices = self._bk_X_cache[cache_key]
-        
-        # Evaluate model only at unique coordinates
+
+        # Build deduplicated union of native diagrams across all requested AM labels.
+        recipes = [(d, *self._native_bx_recipe(d)) for d in am_diagrams]
+        native_idx = {}
+        for _, names, _ in recipes:
+            for n in names:
+                if n not in native_idx:
+                    native_idx[n] = len(native_idx)
+        native_names = list(native_idx.keys())
+
+        ell_tuple = tuple(tuple(ll) for ll in ell_all)
         if is_scoccimarro:
-            bX_batched = self.BX_ell_scoccimarro(coord_all, params, ell_all, diagram, de_model=de_model)
+            bx_native = self.BX_ell_Scocc(coord_all, params, ell=ell_tuple, X_list=native_names,
+                                          de_model=de_model, **self.bispec_kwargs['soccimarro'])
         else:
-            bX_batched = self.BX_ell_sugiyama(coord_all, params, ell_all, diagram, de_model=de_model)
-        
-        # Extract predictions for each observable
-        preds = []
+            bx_native = self.BX_ell_Sugi(coord_all, params, ell=ell_tuple, X_list=native_names,
+                                         de_model=de_model, **self.bispec_kwargs['sugiyama'])
+        # bx_native[ll] shape: (n_coord, nx_native) single-z, (n_coord, nx_native, nz) batched.
+
         is_batched = isinstance(params.get('z'), (list, np.ndarray)) and len(params['z']) > 1
-        segment_idx = 0
-        
-        for obs in observables:
-            iz = getattr(obs, '_batch_iz', None) if is_batched else None
-            ell = obs.ell if obs.ellwin is None else obs.ellwin
-            bX_z = []
-            
-            for ll in ell:
-                idx = segment_indices[segment_idx]
-                bX_slice = bX_batched[ll][idx]
-                if is_batched:
-                    bX_slice = bX_slice[:, iz]
-                bX_z.append(bX_slice)
-                segment_idx += 1
-            
-            bX_z = np.concatenate(bX_z)
-            if obs.xwin is not None:
-                bX_z = obs.wmat @ bX_z
-            preds.append(bX_z)
-            
-        return preds
+
+        # Per AM label, slice the union stack to its recipe-ordered columns and combine.
+        bx_per_diag = {}
+        for d, names, combine in recipes:
+            col_idx = [native_idx[n] for n in names]
+            per_ll = {}
+            for ll in ell_all:
+                full_stack = bx_native[tuple(ll)]
+                sub = full_stack[:, col_idx] if not is_batched else full_stack[:, col_idx, :]
+                per_ll[ll] = combine(sub)
+            bx_per_diag[d] = per_ll
+
+        # Assemble per-observable predictions for each AM label.
+        result = {d: [] for d in am_diagrams}
+        for d in am_diagrams:
+            bx_batched = bx_per_diag[d]
+            segment_idx = 0
+            for obs in observables:
+                iz = getattr(obs, '_batch_iz', None) if is_batched else None
+                ell = obs.ell if obs.ellwin is None else obs.ellwin
+                bX_z = []
+                for ll in ell:
+                    idx = segment_indices[segment_idx]
+                    bX_slice = bx_batched[ll][idx]
+                    if is_batched:
+                        bX_slice = bX_slice[:, iz]
+                    bX_z.append(bX_slice)
+                    segment_idx += 1
+                bX_z = np.concatenate(bX_z)
+                if obs.xwin is not None:
+                    bX_z = obs.wmat @ bX_z
+                result[d].append(bX_z)
+
+        return result
 
     def PX_ell_extra(self, k, params, ell, diagram, de_model):
         if not isinstance(k, list):
@@ -479,20 +520,6 @@ class COMET(comet, BaseModel):
         bsugi = self.Bell_Sugi(pair, params, ell=ell_tuple, de_model=de_model,
                                **self.bispec_kwargs['sugiyama'])
         return {ll: bsugi[tuple(ll)] for ll in ell}
-
-    def BX_ell_scoccimarro(self, tri, params, ell, diagram, de_model):
-        ell_tuple = tuple(tuple(ll) for ll in ell)
-        names, combine = self._native_bx_recipe(diagram)
-        bx = self.BX_ell_Scocc(tri, params, ell=ell_tuple, X_list=names,
-                               de_model=de_model, **self.bispec_kwargs['soccimarro'])
-        return {ll: combine(bx[tuple(ll)]) for ll in ell}
-
-    def BX_ell_sugiyama(self, pair, params, ell, diagram, de_model):
-        ell_tuple = tuple(tuple(ll) for ll in ell)
-        names, combine = self._native_bx_recipe(diagram)
-        bx = self.BX_ell_Sugi(pair, params, ell=ell_tuple, X_list=names,
-                              de_model=de_model, **self.bispec_kwargs['sugiyama'])
-        return {ll: combine(bx[tuple(ll)]) for ll in ell}
 
     def _native_bx_recipe(self, diagram):
         """Map local diagram label (B_NP0/B_MB0/B_NB0) to the native Bnoise_*
