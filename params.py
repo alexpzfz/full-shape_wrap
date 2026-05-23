@@ -51,8 +51,8 @@ for basis_name, basis_params in _default_params['bias'].items():
                                 for name, param_dict in basis_params.items()]
 
 # Create DesJeoSch_r variant
-_bias_params["DesJeoSch_r"] = [dataclasses.replace(p, name=p.name + "r", latex=p.latex + "^r") 
-                                for p in _bias_params["DesJeoSch"]]
+_bias_params["DESI_r"] = [dataclasses.replace(p, name=p.name + "r", latex=p.latex + "^r") 
+                                for p in _bias_params["DESI"]]
 
 # Load extra parameters from YAML
 _extra_params = {}
@@ -67,8 +67,8 @@ for basis_name, basis_params in _default_params['counterterms'].items():
                                        for name, param_dict in basis_params.items()]
 
 # Create DESI_r variant
-_counterterm_params["DESI_r"] = [dataclasses.replace(p, name=p.name + "r", latex=p.latex + "^r") 
-                                  for p in _counterterm_params["DESI"]]
+_counterterm_params["DESIct_r"] = [dataclasses.replace(p, name=p.name + "r", latex=p.latex + "^r") 
+                                  for p in _counterterm_params["DESIct"]]
 
 # Load stochastic parameters from YAML
 _stochastic_params = [_create_parameter_from_dict(name, param_dict) 

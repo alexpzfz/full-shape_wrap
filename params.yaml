@@ -122,7 +122,7 @@ bias:
       fixed: true
       latex: 'b_{\Gamma_{3}}'
   
-  DesJeoSch:
+  DESI:
     b1:
       value: 1.0
       prior: [0.1, 8.0]
@@ -130,7 +130,7 @@ bias:
       fixed: false
       latex: 'b_1'
     
-    b2t:
+    b2d:
       value: 0.0
       prior: [0, 20]
       prior_type: gaussian
@@ -174,7 +174,7 @@ counterterms:
       fixed: true
       latex: 'c_4'
   
-  DESI:
+  DESIct:
     a0:
       value: 0.0
       prior: [-10000, 10000]
