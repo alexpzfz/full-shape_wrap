@@ -61,7 +61,7 @@ class Likelihood:
             self.am_params = []
             self.am_params_0 = []
             self.am_inv_cov = []
-            self.am_det_cov = []
+            self.am_log_det_cov = []
 
             def _am_base_param_name(name):
                 if '_r_' in name:
@@ -71,12 +71,16 @@ class Likelihood:
                 return name.rsplit('_', 1)[0] if '_' in name else name
 
             _bispec_only_params = {'NB0', 'MB0'}
+            _bispec_compatible_params = {'NP0', 'NB0', 'MB0'}
 
             base_am_params = am_params if isinstance(am_params, list) else [am_params]
             for iz in range(self.nobservables):
                 am_iz = [f"{param}_{iz}" if self.nobservables > 1 else param for param in base_am_params]
-                if self.observables[iz].__class__.__name__ == 'PowerSpectrumMultipoles':
+                obs_cls = self.observables[iz].__class__.__name__
+                if obs_cls == 'PowerSpectrumMultipoles':
                     am_iz = [p for p in am_iz if _am_base_param_name(p) not in _bispec_only_params]
+                elif 'Bispectrum' in obs_cls:
+                    am_iz = [p for p in am_iz if _am_base_param_name(p) in _bispec_compatible_params]
                 self.am_params.append(am_iz)
                 for param in am_iz:
                     self.params.parameters[param].value = 0.0
@@ -90,11 +94,12 @@ class Likelihood:
                         self.params.parameters[base_param].derived = False
                 
                 p0 = np.array([self.params.parameters[param].prior[0] for param in am_iz])
-                inv_cov = np.diag([1/self.params.parameters[param].prior[1]**2 for param in am_iz])
-                det_cov = np.prod([self.params.parameters[param].prior[1]**2 for param in am_iz])
+                sigmas = np.array([self.params.parameters[param].prior[1] for param in am_iz])
+                inv_cov = np.diag(1.0 / sigmas**2)
+                log_det_cov = float(2.0 * np.sum(np.log(sigmas)))
                 self.am_params_0.append(p0)
                 self.am_inv_cov.append(inv_cov)
-                self.am_det_cov.append(det_cov)
+                self.am_log_det_cov.append(log_det_cov)
 
 
             #  # check that all am_params are in bias, counterterms or stochastic
@@ -128,7 +133,7 @@ class Likelihood:
         self.nmocks_covs = [obs.nmocks_cov for obs in self.observables]
         self._rescale_covariance()
         # self.icov = np.linalg.inv(self.cov)
-        self.lcovs = [np.linalg.cholesky(obs.cov) for obs in self.observables]
+        self.lcovs = [np.linalg.cholesky(c) for c in self.covs]
     
     
     def _get_hartlap2007_factor(self, n_data, n_mocks):
@@ -186,10 +191,10 @@ class Likelihood:
 
                 dm_iz = self.get_design_matrix(params, dm_cache, i)  # This should be modified to get the correct design matrix for each observable if needed
                 if not self.am_sample:
-                    chi2 = self.marg_chi2(delta, self.lcovs[i], self.am_params_0[i], self.am_inv_cov[i], self.am_det_cov[i], dm_iz)
+                    chi2 = self.marg_chi2(delta, self.lcovs[i], self.am_params_0[i], self.am_inv_cov[i], self.am_log_det_cov[i], dm_iz)
                 else:
                     chi2, cond_mean, cond_cov = self.marg_chi2(delta, self.lcovs[i], self.am_params_0[i], self.am_inv_cov[i],
-                                                                self.am_det_cov[i], dm_iz, return_cond_mean_cov=True)
+                                                                self.am_log_det_cov[i], dm_iz, return_cond_mean_cov=True)
                     self.sample_cond_am(params, cond_mean, cond_cov, iz=i, mode=self.am_sample_mode)
             total_chi2 += chi2
         return total_chi2 
@@ -202,7 +207,7 @@ class Likelihood:
         return loglike
 
     @staticmethod
-    def marg_chi2(diff, dcov_chol, p0_vec, pcov_inv, detpcov, design_mat,
+    def marg_chi2(diff, dcov_chol, p0_vec, pcov_inv, log_detpcov, design_mat,
                   return_cond_mean_cov=False):
         # if not np.all(np.isfinite(diff)):
         #     raise np.linalg.LinAlgError("diff contains NaN or Inf values in marg_chi2")
@@ -215,11 +220,11 @@ class Likelihood:
         # # if not np.isfinite(logdetpcov):
         #     raise np.linalg.LinAlgError("logdetpcov is NaN or Inf in marg_chi2")
 
-        diag_dcov = np.diag(dcov_chol)
-        if np.any(diag_dcov <= 0.0):
-            raise np.linalg.LinAlgError(
-                f"dcov_chol has non-positive diagonal entries in marg_chi2 (min={diag_dcov.min():.3e})"
-            )
+        # diag_dcov = np.diag(dcov_chol)
+        # if np.any(diag_dcov <= 0.0):
+        #     raise np.linalg.LinAlgError(
+        #         f"dcov_chol has non-positive diagonal entries in marg_chi2 (min={diag_dcov.min():.3e})"
+        #     )
 
         res = diff - design_mat @ p0_vec
         #lamb = design_mat.T @ dcov_inv @ design_mat + pcov_inv
@@ -236,16 +241,14 @@ class Likelihood:
         #         f"max|D^T C^-1 D|={np.max(np.abs(dt_cinv_d)):.3e}, max|P^-1|={np.max(np.abs(pcov_inv)):.3e}"
         #     )
         lamb = make_posdef(lamb, matrix_name='lambda')
-        lamb_chol = np.linalg.cholesky(lamb) 
-        # lamb_inv = np.linalg.inv(lamb) if lamb.shape[0] > 1 else 1/lamb
-        # detlamb = np.linalg.det(lamb) if lamb.shape[0] > 1 else lamb
-        # compute log(det(lamb)) from the Cholesky decomposition for numerical stability
-        detlamb = np.prod(np.diag(lamb_chol))**2
+        lamb_chol = np.linalg.cholesky(lamb)
+        # log(det(lamb)) = 2*sum(log(diag(L))) -- avoids overflow for large nam.
+        log_detlamb = 2.0 * np.sum(np.log(np.diag(lamb_chol)))
         b = design_mat.T @ get_Cib(dcov_chol, res)
         chi2 =  get_bCib(dcov_chol, res)
         chi2 = chi2  - get_bCib(lamb_chol, b)
-        chi2 = chi2 + np.log(np.abs(detlamb)) + np.log(np.abs(detpcov))  # Include detpcov in log
-        chi2 = float(np.asarray(chi2)) if lamb.shape[0] == 1 else chi2  # If lamb is 1D, return scalar chi2
+        chi2 = chi2 + log_detlamb + log_detpcov
+        chi2 = float(np.asarray(chi2).reshape(()))
         if return_cond_mean_cov:
             # Here res is already centered on p0_vec, so mean is p0_vec + lamb^{-1} b.
             # cond_cov = lamb_inv
@@ -405,10 +408,12 @@ class Likelihood:
     def sample_cond_am(self, params, mean, cov, iz=0, mode='sample'):
         if len(self.am_params[iz]) == 1:
             am_param = self.am_params[iz][0]
+            mean_s = float(np.asarray(mean).reshape(-1)[0])
+            cov_s = float(np.asarray(cov).reshape(-1)[0])
             if mode == 'sample':
-                value = np.random.normal(mean, np.sqrt(cov))  # Sample from the conditional distribution
+                value = float(np.random.normal(mean_s, np.sqrt(cov_s)))
             else:
-                value = mean  # MAP estimate
+                value = mean_s  # MAP estimate
             params[am_param] = value
         else:
             if mode == 'sample':

@@ -1,7 +1,6 @@
 from comet import comet
 import numpy as np
 from observables import PowerSpectrumMultipoles, BispectrumScoccimarroMultipoles, BispectrumSugiyamaMultipoles, JointObservable
-from bispectrum import bispectrum_scoccimarro_proj, bispectrum_sugiyama_proj, bX_5d, bX_ell_scoccimarro, bX_ell_sugiyama
 from scipy.special import eval_legendre
 from scipy.interpolate import UnivariateSpline, make_interp_spline
 
@@ -92,8 +91,8 @@ class COMET(comet, BaseModel):
         super().__init__(**kwargs)
         self._extra_diagrams = ['Pctr_a0', 'Pctr_a2', 'Pctr_a4']
         self._extra_diagrams_to_marg = {'a0': 'Pctr_a0', 'a2': 'Pctr_a2', 'a4': 'Pctr_a4'}
-        self.bispec_kwargs = {'soccimarro': {'nmu': 5, 'nphi': 5}, 
-                              'sugiyama': {'nmu1': 5, 'nmu12': 12, 'nphi': 5, 'mu12_transform': 'quadratic'}}
+        self.bispec_kwargs = {'soccimarro': {'quad_deg': (5, 5), 'norm': 'legendre'},
+                              'sugiyama': {'quad_deg': (7, 16, 5), 'mu12_transform': 'quadratic'}}
         self.use_interp_kwin = False
 
     def predict_power_spectrum_multipoles(self, observables, params, de_model):
@@ -128,12 +127,12 @@ class COMET(comet, BaseModel):
             
         ell_all, k_all, segment_indices = self._pk_cache[cache_key]
 
-        if (obs.kwin is not None for obs in observables) and self.use_interp_kwin:
+        if self.use_interp_kwin and all(obs.kwin is not None for obs in observables):
             k_eval = self.get_kvec_compression(min(k_all), max(k_all))
             pell_eval = self.Pell(k_eval, params, ell_all, de_model=de_model)
             pell_list = np.stack([pell_eval[f'ell{ll}'] for ll in ell_all], axis=1)
             spline = make_interp_spline(k_eval, pell_list, axis=0)(k_all) #shapke nk nell
-            pell_batched = {f'ell{ll}': spline[:, i, ...] for i, ll in enumerate(ell_all)} 
+            pell_batched = {f'ell{ll}': spline[:, i, ...] for i, ll in enumerate(ell_all)}
 
         
         # Evaluate model only at unique k values
@@ -199,12 +198,12 @@ class COMET(comet, BaseModel):
         if 'a0' in diagram or 'a2' in diagram or 'a4' in diagram:
             px_ell_func = self.PX_ell_extra
 
-        if (obs.kwin is not None for obs in observables) and self.use_interp_kwin:
+        if self.use_interp_kwin and all(obs.kwin is not None for obs in observables):
             k_eval = self.get_kvec_compression(min(k_all), max(k_all))
             pX_eval = px_ell_func(k_eval, params, ell_all, diagram, de_model=de_model)
             pX_list = np.stack([pX_eval[f'ell{ll}'] for ll in ell_all], axis=1)
             spline = make_interp_spline(k_eval, pX_list, axis=0)(k_all)
-            pX_batched = {f'ell{ll}': spline[:, i, ...] for i, ll in enumerate(ell_all)} 
+            pX_batched = {f'ell{ll}': spline[:, i, ...] for i, ll in enumerate(ell_all)}
             
 
         
@@ -470,74 +469,73 @@ class COMET(comet, BaseModel):
         return res
 
     def Bell_scoccimarro(self, tri, params, ell, de_model):
-        if not isinstance(tri, list):
-            tri_all = tri
-            tri = len(ell) * [tri]
-            idx_inverse = None
-        # tri can be different for each ell
-        else:
-        # use only the unique values, but keep track of the indices to put the results back in the right order
-        # keep indices for each ell
-            tri_all = np.concatenate(tri) # tri is a list of arrays of shape (ntri_ell, 3), tri_all is an array of shape (sum(ntri_ell), 3)
-            tri_all, idx_inverse = np.unique(tri_all, axis=0, return_inverse=True) 
-            idx_ell = [np.sum([len(t) for t in tri[:i]]) for i in range(len(tri)+1)] # idx_ell[i] is the starting index of tri[i] in tri_all
+        ell_tuple = tuple(tuple(ll) for ll in ell)
+        bscocc = self.Bell_Scocc(tri, params, ell=ell_tuple, de_model=de_model,
+                                 **self.bispec_kwargs['soccimarro'])
+        return {ll: bscocc[tuple(ll)] for ll in ell}
 
-        k1, k2, k3 = tri_all[:, 0], tri_all[:, 1], tri_all[:, 2]
-        bscocc = bispectrum_scoccimarro_proj(k1, k2, k3, self, params, ell=ell, de_model=de_model, **self.bispec_kwargs['soccimarro']) #shape (ntri, n_ell)
-        res = {}
-        for i, ll in enumerate(ell):
-            res[ll] = bscocc[ll][idx_inverse[idx_ell[i]:idx_ell[i]+len(tri[i])]] if idx_inverse is not None else bscocc[ll]
-        return res
-    
     def Bell_sugiyama(self, pair, params, ell, de_model):
-        # same as above..
-        if not isinstance(pair, list):
-            pair_all = pair
-            pair = len(ell) * [pair]
-            idx_inverse = None
-        else:
-            pair_all = np.concatenate(pair)
-            pair_all, idx_inverse = np.unique(pair_all, axis=0, return_inverse=True) 
-            idx_ell = [int(np.sum([len(p) for p in pair[:i]])) for i in range(len(pair)+1)]
-        k1, k2 = pair_all[:, 0], pair_all[:, 1] 
-        bsugi = bispectrum_sugiyama_proj(k1, k2, self, params, ell=ell, de_model=de_model, **self.bispec_kwargs['sugiyama']) #shape (npair, n_ell)
-        res = {}
-        for i, ll in enumerate(ell):
-            res[ll] = bsugi[ll][idx_inverse][idx_ell[i]:idx_ell[i+1]] if idx_inverse is not None else bsugi[ll]
-        return res
+        ell_tuple = tuple(tuple(ll) for ll in ell)
+        bsugi = self.Bell_Sugi(pair, params, ell=ell_tuple, de_model=de_model,
+                               **self.bispec_kwargs['sugiyama'])
+        return {ll: bsugi[tuple(ll)] for ll in ell}
 
     def BX_ell_scoccimarro(self, tri, params, ell, diagram, de_model):
-        if not isinstance(tri, list):
-            tri_all = tri
-            tri = len(ell) * [tri]
-            idx_inverse = None
-        # tri can be different for each ell
-        else:
-            tri_all = np.concatenate(tri) # tri is a list of arrays of shape (ntri_ell, 3), tri_all is an array of shape (sum(ntri_ell), 3)
-            tri_all, idx_inverse = np.unique(tri_all, axis=0, return_inverse=True) 
-            idx_ell = [np.sum([len(t) for t in tri[:i]]) for i in range(len(tri)+1)] # idx_ell[i] is the starting index of tri[i] in tri_all
-        k1, k2, k3 = tri_all[:, 0], tri_all[:, 1], tri_all[:, 2]
-        bX_scocc = bX_ell_scoccimarro(k1, k2, k3, self, params, ell=ell, diagram=diagram, de_model=de_model, **self.bispec_kwargs['soccimarro']) #shape (ntri, n_ell)
-        res = {}
-        for i, ll in enumerate(ell):
-            res[ll] = bX_scocc[ll][idx_inverse][idx_ell[i]:idx_ell[i]+len(tri[i])] if idx_inverse is not None else bX_scocc[ll]
-        return res
-    
+        ell_tuple = tuple(tuple(ll) for ll in ell)
+        names, combine = self._native_bx_recipe(diagram)
+        bx = self.BX_ell_Scocc(tri, params, ell=ell_tuple, X_list=names,
+                               de_model=de_model, **self.bispec_kwargs['soccimarro'])
+        return {ll: combine(bx[tuple(ll)]) for ll in ell}
+
     def BX_ell_sugiyama(self, pair, params, ell, diagram, de_model):
-        if not isinstance(pair, list):
-            pair_all = pair
-            pair = len(ell) * [pair]
-            idx_inverse = None
-        else:
-            pair_all = np.concatenate(pair)
-            pair_all, idx_inverse = np.unique(pair_all, axis=0, return_inverse=True) 
-            idx_ell = [int(np.sum([len(p) for p in pair[:i]])) for i in range(len(pair)+1)]
-        k1, k2 = pair_all[:, 0], pair_all[:, 1] 
-        bX_sugi = bX_ell_sugiyama(k1, k2, self, params, ell=ell, diagram=diagram, de_model=de_model, **self.bispec_kwargs['sugiyama']) #shape (npair, n_ell)
-        res = {}
-        for i, ll in enumerate(ell):
-            res[ll] = bX_sugi[ll][idx_inverse][idx_ell[i]:idx_ell[i+1]] if idx_inverse is not None else bX_sugi[ll]
-        return res
+        ell_tuple = tuple(tuple(ll) for ll in ell)
+        names, combine = self._native_bx_recipe(diagram)
+        bx = self.BX_ell_Sugi(pair, params, ell=ell_tuple, X_list=names,
+                              de_model=de_model, **self.bispec_kwargs['sugiyama'])
+        return {ll: combine(bx[tuple(ll)]) for ll in ell}
+
+    def _native_bx_recipe(self, diagram):
+        """Map local diagram label (B_NP0/B_MB0/B_NB0) to the native Bnoise_*
+        diagram list plus a closure that combines the stripped kernels into the
+        design-matrix contribution dB/dparam.
+
+        Native bias decomposition (from `BispNum.__stoch_bias_coeffs`):
+            coeff(Bnoise_MB0b1b1) = b1**2 * MB0 / nbar
+            coeff(Bnoise_MB0b1)   = b1 * (MB0 + NP0) / nbar
+            coeff(Bnoise_NP0)     = NP0 / nbar
+            coeff(Bnoise_NB0)     = NB0 / nbar**2  (kernel is 1/qiso6 at the
+                                                   monopole, 0 elsewhere)
+
+        The closure reads `self.params['b1']`, which the upstream native call
+        will have updated to match the input `params` dict.
+        """
+        if diagram == 'B_NP0':
+            names = ['Bnoise_MB0b1', 'Bnoise_NP0']
+            def combine(stack):
+                b1 = np.atleast_1d(self.params['b1'])
+                nbar = np.atleast_1d(self.nbar)
+                if stack.ndim == 3:  # (n_coord, nx, nparams)
+                    return (b1 * stack[:, 0] + stack[:, 1]) / nbar
+                return (b1[0] * stack[:, 0] + stack[:, 1]) / nbar[0]
+            return names, combine
+        if diagram == 'B_MB0':
+            names = ['Bnoise_MB0b1b1', 'Bnoise_MB0b1']
+            def combine(stack):
+                b1 = np.atleast_1d(self.params['b1'])
+                nbar = np.atleast_1d(self.nbar)
+                if stack.ndim == 3:
+                    return (b1**2 * stack[:, 0] + b1 * stack[:, 1]) / nbar
+                return (b1[0]**2 * stack[:, 0] + b1[0] * stack[:, 1]) / nbar[0]
+            return names, combine
+        if diagram == 'B_NB0':
+            names = ['Bnoise_NB0']
+            def combine(stack):
+                nbar = np.atleast_1d(self.nbar)
+                if stack.ndim == 3:
+                    return stack[:, 0] / nbar**2
+                return stack[:, 0] / nbar[0]**2
+            return names, combine
+        raise ValueError(f"Unknown bispectrum X diagram label: {diagram!r}")
         
 
 
