@@ -42,7 +42,10 @@ class Likelihood:
         self.z_list = [obs.cosmo_fid['z'] for obs in self.observables]
         cosmo_fid = {p: np.array([v]*self.nobservables) for p, v in self.observables[0].cosmo_fid.items()}
         cosmo_fid['z'] = np.array(self.z_list)
-        self.emu.define_fiducial_cosmology(cosmo_fid)
+        de_model_fid = 'lambda'
+        if any(cosmo_fid['w0'] != -1.) or any(cosmo_fid['wa'] != 0.):
+            de_model_fid = 'w0wa'
+        self.emu.define_fiducial_cosmology(cosmo_fid, de_model=de_model_fid)
         self.nbar_list = [getattr(obs, 'nbar', None) for obs in self.observables]
         if any(nbar is not None for nbar in self.nbar_list):
             self.emu.define_nbar(self.nbar_list)
