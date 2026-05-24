@@ -204,6 +204,13 @@ extra:
       prior_type: uniform
       fixed: true
       latex: 'a_{\rm vir}'
+      
+    avirB:
+      value: 5.0
+      prior: [0.0, 10.0]
+      prior_type: uniform
+      fixed: true
+      latex: 'a^B_{\rm vir}'
   
   EFT:
     cnlo:
