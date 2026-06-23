@@ -8,8 +8,10 @@ class Observable:
         self.y = y.copy()
         if not isinstance(self.y, list):
             self.y = [self.y]
-        if not isinstance(self.x, list) or len(self.x) == 1:
+        if not isinstance(self.x, list):
             self.x = [self.x] * len(self.y)
+        elif len(self.x) == 1:
+            self.x = self.x * len(self.y)
         self.cosmo_fid = cosmo_fid
         self.h_fid = cosmo_fid['h'] if cosmo_fid is not None else None
         self.cov = cov.copy() if cov is not None else None
@@ -34,9 +36,9 @@ class Observable:
             self._cut_scales(xmin, xmax, xwinmin, xwinmax)
 
     def _cut_scales(self, xmin, xmax, xwinmin=None, xwinmax=None):
-        if isinstance(xmin, float):
+        if np.isscalar(xmin):
             xmin = [xmin] * self.n_obs
-        if isinstance(xmax, float):
+        if np.isscalar(xmax):
             xmax = [xmax] * self.n_obs
         if xmin is None:
             xmin = [-np.inf] * self.n_obs
@@ -58,9 +60,9 @@ class Observable:
         if self.wmat is not None:
             self.wmat = self.wmat[cov_mask, :] # shape (n_data_cut, n_win)
         if xwinmin is not None or xwinmax is not None:
-            if isinstance(xwinmin, float):
+            if np.isscalar(xwinmin):
                 xwinmin = [xwinmin] * self.nobswin
-            if isinstance(xwinmax, float):
+            if np.isscalar(xwinmax):
                 xwinmax = [xwinmax] * self.nobswin
             if xwinmin is None:
                 xwinmin = [-np.inf] * self.nobswin

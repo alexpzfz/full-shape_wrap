@@ -91,7 +91,7 @@ class COMET(comet, BaseModel):
         super().__init__(**kwargs)
         self._extra_diagrams = ['Pctr_a0', 'Pctr_a2', 'Pctr_a4']
         self._extra_diagrams_to_marg = {'a0': 'Pctr_a0', 'a2': 'Pctr_a2', 'a4': 'Pctr_a4'}
-        self.bispec_kwargs = {'soccimarro': {'quad_deg': (5, 5), 'norm': 'legendre'},
+        self.bispec_kwargs = {'scoccimarro': {'quad_deg': (5, 5), 'norm': 'legendre'},
                               'sugiyama': {'quad_deg': (7, 16, 5), 'mu12_transform': 'quadratic'}}
         self.use_interp_kwin = False
 
@@ -251,7 +251,7 @@ class COMET(comet, BaseModel):
             # Collect all triangles and track which observable/ell they belong to
             tri_segments = []  # List of (tri_array, obs_idx, ell_idx)
             for obs_idx, obs in enumerate(observables):
-                tri = obs.tri if obs.triwin is None else obs.triwin
+                tri = obs.tri if obs.xwin is None else obs.triwin
                 ell = obs.ell if obs.ellwin is None else obs.ellwin
                 for ell_idx, tri_ell in enumerate(tri):
                     tri_segments.append((tri_ell, obs_idx, ell_idx))
@@ -430,7 +430,7 @@ class COMET(comet, BaseModel):
         ell_tuple = tuple(tuple(ll) for ll in ell_all)
         if is_scoccimarro:
             bx_native = self.BX_ell_Scocc(coord_all, params, ell=ell_tuple, X_list=native_names,
-                                          de_model=de_model, **self.bispec_kwargs['soccimarro'])
+                                          de_model=de_model, **self.bispec_kwargs['scoccimarro'])
         else:
             bx_native = self.BX_ell_Sugi(coord_all, params, ell=ell_tuple, X_list=native_names,
                                          de_model=de_model, **self.bispec_kwargs['sugiyama'])
@@ -512,7 +512,7 @@ class COMET(comet, BaseModel):
     def Bell_scoccimarro(self, tri, params, ell, de_model):
         ell_tuple = tuple(tuple(ll) for ll in ell)
         bscocc = self.Bell_Scocc(tri, params, ell=ell_tuple, de_model=de_model,
-                                 **self.bispec_kwargs['soccimarro'])
+                                 **self.bispec_kwargs['scoccimarro'])
         return {ll: bscocc[tuple(ll)] for ll in ell}
 
     def Bell_sugiyama(self, pair, params, ell, de_model):

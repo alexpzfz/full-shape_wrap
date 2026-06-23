@@ -43,7 +43,9 @@ class Likelihood:
         cosmo_fid = {p: np.array([v]*self.nobservables) for p, v in self.observables[0].cosmo_fid.items()}
         cosmo_fid['z'] = np.array(self.z_list)
         de_model_fid = 'lambda'
-        if any(cosmo_fid['w0'] != -1.) or any(cosmo_fid['wa'] != 0.):
+        w0_fid = cosmo_fid.get('w0', np.full(self.nobservables, -1.0))
+        wa_fid = cosmo_fid.get('wa', np.zeros(self.nobservables))
+        if np.any(w0_fid != -1.) or np.any(wa_fid != 0.):
             de_model_fid = 'w0wa'
         self.emu.define_fiducial_cosmology(cosmo_fid, de_model=de_model_fid)
         self.nbar_list = [getattr(obs, 'nbar', None) for obs in self.observables]

@@ -339,11 +339,12 @@ class Params:
             for base in base_names:
                 if self.nz > 1:
                     val = [full_dict[f"{base}_{i}"] for i in range(self.nz) if f"{base}_{i}" in full_dict]
+                    if len(val) == self.nz:
+                        comet_dict[base] = np.array(val)
                 else:
                     val = full_dict.get(base, None)
-                if val:
-                    # Pass as array if multi-z, else scalar
-                    comet_dict[base] = np.array(val) if self.nz > 1 else val
+                    if val is not None:
+                        comet_dict[base] = val
                     
         comet_dict['z'] = np.array(self.z_array) if self.nz > 1 else self.z_array[0]
         return comet_dict
