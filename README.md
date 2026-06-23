@@ -11,7 +11,7 @@ The package is organized around four stages:
 3. **Likelihood** ([likelihood.py](likelihood.py)) — computes the Gaussian χ² between data and the COMET prediction (via [theory.py](theory.py)) for one or more observables/redshift bins, with covariance rescaling (Hartlap/Percival factors) and optional analytical marginalization (AM) over linear nuisance parameters (shot-noise, counterterms, etc.).
 4. **Samplers** ([samplers.py](samplers.py)) — `NautilusSampler` for nested sampling (via [nautilus](https://github.com/johannesulf/nautilus)) and `MinuitMinimizer` for MAP/best-fit estimation (via [iminuit](https://github.com/scikit-hep/iminuit)).
 
-[theory.py](theory.py) wraps the COMET emulator to batch-evaluate multipole predictions across observables and redshift bins (caching unique k/triangle/pair evaluations), and to build the per-parameter design matrix used for analytical marginalization. [bispectrum.py](bispectrum.py) is a standalone, from-scratch perturbation-theory implementation of the bispectrum (tree-level + VDG Fingers-of-God damping, Scoccimarro/Sugiyama projections) used to cross-check the emulator and to derive AM design-matrix kernels not natively exposed by COMET. [utils.py](utils.py) has helpers for cutting covariance/window matrices to a given scale range.
+[theory.py](theory.py) wraps the COMET emulator to batch-evaluate multipole predictions across observables and redshift bins (caching unique k/triangle/pair evaluations), and to build the per-parameter design matrix used for analytical marginalization. [utils.py](utils.py) has helpers for cutting covariance/window matrices to a given scale range.
 
 ## Requirements
 

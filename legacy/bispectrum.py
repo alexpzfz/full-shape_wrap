@@ -1,3 +1,9 @@
+"""
+bispectrum.py is kept as a legacy module for testing purposes.
+The main code now uses the native comet implementation.
+Please use either the desilike or the bispec_ext branches of comet for the latest bispectrum implementation.
+"""
+
 import numpy as np
 from scipy.special import legendre, factorial, lpmv
 from scipy.interpolate import interp1d, RegularGridInterpolator, RectBivariateSpline, make_interp_spline, CubicSpline
