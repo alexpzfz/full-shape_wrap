@@ -422,6 +422,54 @@ class Params:
     def get_sigma_12(self, p, iz=0):
         s12_out = self.emu.params['s12']
         return s12_out[iz] if isinstance(s12_out, (list, np.ndarray)) else s12_out
+    
+    def get_sigma_R(self, p, R, iz=0):
+        if not hasattr(self, '_sigmaR_cache'):
+            self._sigmaR_cache = {}
+            
+        cosmo_dict = self.cosmo_dict(p)
+        cosmo_tup = tuple((k, tuple(v) if isinstance(v, (list, np.ndarray)) else v) for k, v in sorted(cosmo_dict.items()))
+        
+        # Cache the full array/scalar independent of iz so multiz evaluates it only once
+        cache_key = (R, cosmo_tup)
+        
+        if cache_key in self._sigmaR_cache:
+            sR_out = self._sigmaR_cache[cache_key]
+        else:
+            comet_dict = self.get_comet_dict(p)
+            sR_out = self.emu.sigmaR(R, comet_dict, de_model=self.de_model)
+            self._sigmaR_cache[cache_key] = sR_out
+            
+        val = sR_out[iz] if isinstance(sR_out, (list, np.ndarray)) else sR_out
+        return val
+
+    def get_sigma_8(self, p, iz=0):
+        h = np.asarray(p.get('h', self.emu.params['h'])).flat[0]
+        R = 8.0 if not self.emu.use_Mpc else 8.0 / h
+        return self.get_sigma_R(p, R=R, iz=iz)
+
+    def _sigma_reparam_mode(self):
+        for mode in (self.reparam_bias_mode, self.reparam_counterterms_mode, self.reparam_stochastic_mode):
+            if mode is None:
+                continue
+            if 'sigma_8' in mode:
+                return 'sigma_8'
+            if 'sigma_12' in mode:
+                return 'sigma_12'
+        return None
+
+    def _sigma_reparam_name(self, iz=0):
+        sigma_mode = self._sigma_reparam_mode()
+        if sigma_mode is None:
+            return None
+        s_iz = f"_{iz}" if self.nz > 1 else ""
+        return f"{sigma_mode}{s_iz}"
+
+    def _sigma_reparam_factor(self, p, power, iz=0):
+        sigma_name = self._sigma_reparam_name(iz)
+        if sigma_name is None:
+            return 1.0
+        return self.sigmaR_ref[iz] ** power / p[sigma_name] ** power
 
     def get_base_names(self, param_dict):
             if len(self.z_array) > 1:
@@ -431,12 +479,10 @@ class Params:
 
     def _reparam_bias_factor(self, p, name, iz=0):
         factor_ap = 1.0
-        factor_sigmaR = 1.0
         s_iz = f"_{iz}" if self.nz > 1 else ""
         if 'ap' in self.reparam_bias_mode:
             factor_ap = np.sqrt(p[f'q_iso3{s_iz}'])
-        if 'sigma_12' in self.reparam_bias_mode:
-            factor_sigmaR = self.sigmaR_ref[iz] / p[f'sigma_12{s_iz}']
+        factor_sigmaR = self._sigma_reparam_factor(p, power=1, iz=iz)
 
         if name == f'b1_r{s_iz}':
             return factor_sigmaR * factor_ap
@@ -453,8 +499,7 @@ class Params:
         s_iz = f"_{iz}" if self.nz > 1 else ""
         if 'ap' in self.reparam_counterterms_mode:
             factor *= p[f'q_iso3{s_iz}']
-        if 'sigma_12' in self.reparam_counterterms_mode:
-            factor *= self.sigmaR_ref[iz]**2 / p[f'sigma_12{s_iz}']**2
+        factor *= self._sigma_reparam_factor(p, power=2, iz=iz)
         return factor
 
     # def _reparam_stochastic_factor(self, p, iz=0):
@@ -508,6 +553,7 @@ class Params:
 
         # verify that the specified modes are valid
         valid_modes = ['ap', 'sigma_12', 'ap+sigma_12', 'none']
+        valid_modes += ['sigma_8', 'ap+sigma_8']
         if bias_mode not in valid_modes:
             raise ValueError(f"Invalid bias_mode {bias_mode}. Must be one of {valid_modes}.")
         if counterterms_mode not in valid_modes:
@@ -523,9 +569,14 @@ class Params:
 
         require_ap = 'ap' in bias_mode or 'ap' in counterterms_mode or 'ap' in stochastic_mode
         require_sigma_12 = 'sigma_12' in bias_mode or 'sigma_12' in counterterms_mode or 'sigma_12' in stochastic_mode
-        reparam_counterterms = counterterms_mode in ['ap', 'sigma_12', 'ap+sigma_12']
-        reparam_bias = bias_mode in ['ap', 'sigma_12', 'ap+sigma_12']
-        reparam_stochastic = stochastic_mode in ['ap'] # no sigma_12 required for shot noise
+        reparam_counterterms = counterterms_mode in ['ap', 'sigma_12', 'ap+sigma_12', 'sigma_8', 'ap+sigma_8']
+        reparam_bias = bias_mode in ['ap', 'sigma_12', 'ap+sigma_12', 'sigma_8', 'ap+sigma_8']
+        reparam_stochastic = stochastic_mode in ['ap']
+
+        require_sigma_8 = 'sigma_8' in bias_mode or 'sigma_8' in counterterms_mode or 'sigma_8' in stochastic_mode
+        if require_sigma_12 and require_sigma_8:
+            raise ValueError("Cannot use both sigma_12 and sigma_8 reparametrization at the same time.")
+        require_sigmaR = require_sigma_12 or require_sigma_8 
 
         if require_ap:
             for iz in range(self.nz):
@@ -538,6 +589,11 @@ class Params:
                 name = f'sigma_12_{iz}' if self.nz > 1 else 'sigma_12'
                 latex = add_iz_to_latex(r"\sigma_{12}", iz) if self.nz > 1 else r"\sigma_{12}"
                 self.set_derived_param(name, partial(self.get_sigma_12, iz=iz), requires_emu_eval=True, latex=latex, exported=True)
+        if require_sigma_8:
+            for iz in range(self.nz):
+                name = f'sigma_8_{iz}' if self.nz > 1 else 'sigma_8'
+                latex = add_iz_to_latex(r"\sigma_{8}", iz) if self.nz > 1 else r"\sigma_{8}"
+                self.set_derived_param(name, partial(self.get_sigma_8, iz=iz), requires_emu_eval=True, latex=latex, exported=True)
 
         if reparam_counterterms: 
             for base in self.get_base_names(self.counterterm_params):
