@@ -549,7 +549,8 @@ class Params:
         
 
     def use_reparametrization(self, bias_mode='ap+sigma_12', counterterms_mode='ap+sigma_12',
-                              stochastic_mode='ap', third_oder_bias_power=4.0, sigmaR_ref=1.0):
+                              stochastic_mode='ap', third_oder_bias_power=4.0, sigmaR_ref=1.0,
+                              bias_linear_only=False):
 
         # verify that the specified modes are valid
         valid_modes = ['ap', 'sigma_12', 'ap+sigma_12', 'none']
@@ -606,6 +607,9 @@ class Params:
 
         if reparam_bias:
             for base in self.get_base_names(self.bias_params):
+                if bias_linear_only:
+                    if base not in ['g21', 'bGam3', 'btd', 'btdt']:
+                        continue
                 for iz in range(self.nz):
                     name_reparam = f"{base}_r_{iz}" if self.nz > 1 else f"{base}_r"
                     target_name = f"{base}_{iz}" if self.nz > 1 else base
