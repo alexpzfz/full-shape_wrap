@@ -188,6 +188,7 @@ class Likelihood:
 
         total_chi2 = 0.0
         dm_cache = {} if self.do_am else None
+        self._last_am_cond_covs = []  # reset cache each call
         for i, obs in enumerate(self.observables):
             delta = self.ys[i] - preds[i]
             if not self.do_am:
@@ -197,9 +198,11 @@ class Likelihood:
                 dm_iz = self.get_design_matrix(params, dm_cache, i)  # This should be modified to get the correct design matrix for each observable if needed
                 if not self.am_sample:
                     chi2 = self.marg_chi2(delta, self.lcovs[i], self.am_params_0[i], self.am_inv_cov[i], self.am_log_det_cov[i], dm_iz)
+                    self._last_am_cond_covs.append(None)
                 else:
                     chi2, cond_mean, cond_cov = self.marg_chi2(delta, self.lcovs[i], self.am_params_0[i], self.am_inv_cov[i],
                                                                 self.am_log_det_cov[i], dm_iz, return_cond_mean_cov=True)
+                    self._last_am_cond_covs.append(cond_cov)
                     self.sample_cond_am(params, cond_mean, cond_cov, iz=i, mode=self.am_sample_mode)
             total_chi2 += chi2
         return total_chi2 
