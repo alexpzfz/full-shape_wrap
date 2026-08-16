@@ -231,7 +231,6 @@ class Likelihood:
         #         f"dcov_chol has non-positive diagonal entries in marg_chi2 (min={diag_dcov.min():.3e})"
         #     )
 
-        res = diff - design_mat @ p0_vec
         #lamb = design_mat.T @ dcov_inv @ design_mat + pcov_inv
         dt_cinv_d = get_bCib(dcov_chol, design_mat)
         # if not np.all(np.isfinite(dt_cinv_d)):
@@ -249,15 +248,16 @@ class Likelihood:
         lamb_chol = np.linalg.cholesky(lamb)
         # log(det(lamb)) = 2*sum(log(diag(L))) -- avoids overflow for large nam.
         log_detlamb = 2.0 * np.sum(np.log(np.diag(lamb_chol)))
-        b = design_mat.T @ get_Cib(dcov_chol, res)
-        chi2 =  get_bCib(dcov_chol, res)
+        b = design_mat.T @ get_Cib(dcov_chol, diff) + pcov_inv @ p0_vec
+        chi2 =  get_bCib(dcov_chol, diff)
+        chi2 = chi2 + p0_vec.T @ pcov_inv @ p0_vec
         chi2 = chi2  - get_bCib(lamb_chol, b)
         chi2 = chi2 + log_detlamb + log_detpcov
         chi2 = float(np.asarray(chi2).reshape(()))
         if return_cond_mean_cov:
             # Here res is already centered on p0_vec, so mean is p0_vec + lamb^{-1} b.
             # cond_cov = lamb_inv
-            cond_mean = p0_vec + get_Cib(lamb_chol, b)
+            cond_mean = get_Cib(lamb_chol, b)
             lamb_inv = get_inv_chol(lamb_chol)
             return chi2, cond_mean, lamb_inv
         return chi2
