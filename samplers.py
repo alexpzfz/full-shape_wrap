@@ -15,15 +15,18 @@ class BaseSampler:
             param = self.params.parameters[name]
             if param.prior is not None:
                 if param.prior_type == "uniform":
-                    # For minimization, we handle uniform bounds via Minuit limits,
-                    # but we keep this check for completeness.
                     if not (param.prior[0] <= value <= param.prior[1]):
                         return -np.inf 
-                    # Constant log_prior for uniform can be ignored for minimization
+                    else:
+                        # add the actual log prior contribution for uniform prior
+                        # to ensure proper normalization (important when estimating profile errors?)
+                        log_prior += np.log(1.0 / (param.prior[1] - param.prior[0]))
+
                 elif param.prior_type == "gaussian":
                     mean, std = param.prior
                     # Gaussian contribution: -0.5 * chi2_prior
                     log_prior += -0.5 * ((value - mean) / std) ** 2 
+                    log_prior += np.log(1.0 / (std * np.sqrt(2 * np.pi)))  # normalization term 
         return log_prior
 
 
