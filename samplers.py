@@ -138,15 +138,60 @@ class MinuitMinimizer(BaseSampler):
                     self.m.limits[name] = _comet_limits[name]
             
             # Set Initial Step Size (Heuristic)
-            # If value is non-zero, take fraction, else take absolute step
-            step = abs(p.value) * initial_step if p.value != 0 else initial_step
+            # Prefer prior-based step so that zero-initialised nuisance params
+            # get a meaningful scale rather than a hard-coded constant.
+            if p.value != 0:
+                step = abs(p.value) * initial_step
+            elif p.prior is not None:
+                if p.prior_type == 'gaussian':
+                    # sigma of the Gaussian prior is the natural scale
+                    step = p.prior[1] * initial_step
+                elif p.prior_type == 'uniform':
+                    # half-width of the uniform interval
+                    step = (p.prior[1] - p.prior[0]) * initial_step
+                else:
+                    step = initial_step
+            else:
+                step = initial_step
+            # Guard against zero or tiny steps
+            if step == 0 or not np.isfinite(step):
+                step = initial_step
             self.m.errors[name] = step
         
         if verbose:
             print(f"Initialized Minuit with {len(self.params.sampled_param_names)} free parameters.")
 
+    def set_starting_point(self, param_dict, errors_dict=None, reset_errors=True):
+        """Seed Minuit's starting values from a dictionary of parameter values.
+
+        Parameters
+        ----------
+        param_dict : dict
+            Mapping of parameter name -> value.  Only names that are free
+            (i.e. in ``self.sampled_param_names``) will be applied; extra
+            keys are silently ignored.
+        errors_dict : dict, optional
+            Mapping of parameter name -> step size / uncertainty.  When
+            provided, these override the automatic ``reset_errors`` heuristic
+            for the corresponding parameters.
+        reset_errors : bool
+            If True, reset each step-size to 10 % of the absolute starting
+            value for parameters not covered by ``errors_dict`` (falls back
+            to the current error if the value is 0).
+        """
+        for name in self.sampled_param_names:
+            if name in param_dict:
+                val = float(param_dict[name])
+                self.m.values[name] = val
+                if errors_dict is not None and name in errors_dict:
+                    err = float(errors_dict[name])
+                    if np.isfinite(err) and err > 0:
+                        self.m.errors[name] = err
+                elif reset_errors and val != 0:
+                    self.m.errors[name] = abs(val) * 0.1
+
     def run(self, hesse=False, strategy=1, tol=0.1, max_calls=(200000, 800000, 2000000),
-            simplex_on_retry=True, verbose=True):
+            simplex_on_retry=True, two_phase=False, verbose=True):
         """
         Run the minimization with robust retries.
 
@@ -162,9 +207,28 @@ class MinuitMinimizer(BaseSampler):
             Sequence of ncall values to try for MIGRAD. Each element is one retry.
         simplex_on_retry : bool
             If True, run SIMPLEX before MIGRAD on retries to improve robustness.
+        two_phase : bool
+            If True, run a cheap loose first pass (strategy=1, tol=1.0) before the
+            main minimization with the requested strategy/tol.  Helps locate the
+            basin of attraction cheaply when starting far from the minimum.
         verbose : bool
             If True, print retry/convergence status.
         """
+        # --- optional cheap first pass to locate the basin -----------------
+        if two_phase:
+            if verbose:
+                print("two_phase=True: running loose first pass (strategy=1, tol=1.0) …")
+            self.m.strategy = 1
+            self.m.tol = 1.0
+            self.m.migrad(ncall=max_calls[0])
+            _print_fmin_diagnostics = lambda prefix: None  # placeholder; real one defined below
+            if verbose:
+                fmin = self.m.fmin
+                print(
+                    f"Loose pass: valid={self.m.valid}, "
+                    f"edm={fmin.edm:.3e}, nfcn={fmin.nfcn}"
+                )
+        # --- main minimization -----------------------------------------------
         self.m.strategy = strategy
         self.m.tol = tol
 
@@ -181,6 +245,7 @@ class MinuitMinimizer(BaseSampler):
             print(
                 f"{prefix}: "
                 f"valid={self.m.valid}, "
+                f"fval={_fmt_sci(_fmin_flag(fmin, 'fval'))}, "
                 f"edm={_fmt_sci(_fmin_flag(fmin, 'edm'))}, "
                 f"edm_goal={_fmt_sci(_fmin_flag(fmin, 'edm_goal'))}, "
                 f"above_max_edm={_fmin_flag(fmin, 'is_above_max_edm')}, "
@@ -225,16 +290,37 @@ class MinuitMinimizer(BaseSampler):
         return self.m
     
     def get_map(self, return_am=True):
-        """Return the best-fit parameters and their uncertainties"""
+        """Return the best-fit parameters and their uncertainties.
+
+        Parameters
+        ----------
+        return_am : bool
+            If True and the likelihood uses analytical marginalisation, also
+            return the conditional MAP values *and* formal uncertainties
+            (``sqrt(diag(cond_cov))``) for the analytically-marginalised
+            parameters.
+        """
         if not self.m.valid:
-            raise RuntimeError("Minimization did not converge. Check the fit status.")
+            import warnings
+            edm = getattr(self.m.fmin, 'edm', float('nan'))
+            warnings.warn(
+                f"Minimization did not fully converge (valid=False, edm={edm:.3e}). "
+                f"Returning best-fit values anyway — verify that edm is acceptably small."
+            )
         
         best_fit = {name: self.m.values[name] for name in self.sampled_param_names}
         uncertainties = {name: self.m.errors[name] for name in self.sampled_param_names}
         if return_am and self.likelihood.do_am:
             full_dict = self.params.get_full_dict(best_fit)
             self.likelihood.am_sample_mode = 'map'
-            self.likelihood.get_chi2(full_dict)  # Update AM params to best-fit values
+            self.likelihood.get_chi2(full_dict)  # Update AM params and cache cond_cov
             all_am_params = [name for am_params_iz in self.likelihood.am_params for name in am_params_iz]
             best_fit.update({name: full_dict[name] for name in all_am_params})
+            # Extract formal uncertainties from the cached conditional covariances
+            for iz, am_params_iz in enumerate(self.likelihood.am_params):
+                cond_cov = getattr(self.likelihood, '_last_am_cond_covs', [None] * (iz + 1))[iz]
+                if cond_cov is not None:
+                    am_errors = np.sqrt(np.diag(np.atleast_2d(cond_cov)))
+                    for j, name in enumerate(am_params_iz):
+                        uncertainties[name] = float(am_errors[j])
         return best_fit, uncertainties
