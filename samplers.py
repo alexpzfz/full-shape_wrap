@@ -92,7 +92,7 @@ class NautilusSampler(BaseSampler):
 
 class MinuitMinimizer(BaseSampler):
     """Wrapper for the iMinuit minimizer"""
-    def __init__(self, likelihood, initial_step=0.1, verbose=False):
+    def __init__(self, likelihood, initial_step=0.1, seed_init=None, verbose=False):
         super().__init__(likelihood)
         from iminuit import Minuit
             
@@ -114,8 +114,33 @@ class MinuitMinimizer(BaseSampler):
             return chi2_data + chi2_prior
 
         # 2. Setup Initial Values
+
+        if seed_init is not None:
+            np.random.seed(seed_init)
         self.sampled_param_names = self.params.sampled_param_names
-        init_values = [self.params.parameters[n].value for n in self.sampled_param_names]
+        # init_values = [self.params.parameters[n].value for n in self.sampled_param_names]
+        init_values = []
+        for n in self.sampled_param_names:
+            p = self.params.parameters[n]
+            if p.prior_type == 'uniform':
+                # Start at the midpoint of the uniform prior
+                if seed_init is None:
+                    init_values.append(0.5 * (p.prior[0] + p.prior[1]))
+                else:
+                    # draw a random starting point within the uniform prior range
+                    init_values.append(np.random.uniform(p.prior[0], p.prior[1]))
+            elif p.prior_type == 'gaussian':
+                # Start at the mean of the Gaussian prior
+                if seed_init is None:
+                    init_values.append(p.prior[0])
+                else:
+                    # draw a random starting point from the Gaussian prior
+                    init_values.append(np.random.normal(p.prior[0], p.prior[1]))
+            else:
+                # Fallback to the current value if no prior is defined
+                print(f"Warning: Parameter {n} has no prior defined. Using current value {p.value} as starting point.")
+                print("This should almost never happen, as all sampled parameters should have a prior.")
+                init_values.append(p.value)
 
         # 3. Initialize Minuit
         # We pass the cost function, the starting values, and the names
