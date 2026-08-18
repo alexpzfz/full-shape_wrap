@@ -218,10 +218,10 @@ class MinuitMinimizer(BaseSampler):
                 elif reset_errors and val != 0:
                     self.m.errors[name] = abs(val) * 0.1
 
-    def run(self, hesse=False, strategy=1, tol=0.1, max_calls=(200000, 800000, 2000000),
-            simplex_on_retry=True, two_phase=False, verbose=True):
+    def run(self, hesse=False, strategy=1, tol=0.1, ncall=None, iterate=5,
+            use_simplex=True, print_level=1, pre_simplex=False, verbose=True):
         """
-        Run the minimization with robust retries.
+        Run the minimization.
 
         Parameters
         ----------
@@ -231,89 +231,44 @@ class MinuitMinimizer(BaseSampler):
             Minuit strategy level. Use 2 for a stringent convergence strategy.
         tol : float
             EDM tolerance. Smaller values enforce tighter convergence.
-        max_calls : tuple[int, ...]
-            Sequence of ncall values to try for MIGRAD. Each element is one retry.
-        simplex_on_retry : bool
-            If True, run SIMPLEX before MIGRAD on retries to improve robustness.
-        two_phase : bool
-            If True, run a cheap loose first pass (strategy=1, tol=1.0) before the
-            main minimization with the requested strategy/tol.  Helps locate the
-            basin of attraction cheaply when starting far from the minimum.
+        ncall : int or None
+            Approximate maximum number of calls per MIGRAD attempt. If None,
+            iminuit uses its adaptive heuristic.
+        iterate : int
+            Number of times Minuit.migrad will automatically retry if
+            convergence was not reached (see iminuit's `migrad` docs).
+        use_simplex : bool
+            If retrying, run SIMPLEX before each MIGRAD retry (see iminuit's
+            `migrad` docs).
+        print_level : int
+            Minuit's own verbosity (0-3) while it runs; at 2 it prints one
+            line per MIGRAD/SIMPLEX iteration, which makes retries and
+            simplex fallbacks visible live. Only applied when verbose=True.
+            Note this sets a process-wide iminuit setting, not just for this
+            instance.
+        pre_simplex: bool
+            Start the run with a SIMPLEX call.
         verbose : bool
-            If True, print retry/convergence status.
+            If True, print convergence diagnostics.
         """
-        # --- optional cheap first pass to locate the basin -----------------
-        if two_phase:
-            if verbose:
-                print("two_phase=True: running loose first pass (strategy=1, tol=1.0) …")
-            self.m.strategy = 1
-            self.m.tol = 1.0
-            self.m.migrad(ncall=max_calls[0])
-            _print_fmin_diagnostics = lambda prefix: None  # placeholder; real one defined below
-            if verbose:
-                fmin = self.m.fmin
-                print(
-                    f"Loose pass: valid={self.m.valid}, "
-                    f"edm={fmin.edm:.3e}, nfcn={fmin.nfcn}"
-                )
-        # --- main minimization -----------------------------------------------
         self.m.strategy = strategy
         self.m.tol = tol
+        self.m.print_level = print_level if verbose else 0
 
-        def _fmin_flag(fmin, attr, default="n/a"):
-            return getattr(fmin, attr, default)
-
-        def _fmt_sci(value):
-            return f"{value:.3e}" if isinstance(value, (int, float, np.floating)) else value
-
-        def _print_fmin_diagnostics(prefix):
-            fmin = self.m.fmin
-            if not verbose:
-                return
-            print(
-                f"{prefix}: "
-                f"valid={self.m.valid}, "
-                f"fval={_fmt_sci(_fmin_flag(fmin, 'fval'))}, "
-                f"edm={_fmt_sci(_fmin_flag(fmin, 'edm'))}, "
-                f"edm_goal={_fmt_sci(_fmin_flag(fmin, 'edm_goal'))}, "
-                f"above_max_edm={_fmin_flag(fmin, 'is_above_max_edm')}, "
-                f"call_limit={_fmin_flag(fmin, 'has_reached_call_limit')}, "
-                f"at_limit={_fmin_flag(fmin, 'has_parameters_at_limit')}, "
-                f"hesse_failed={_fmin_flag(fmin, 'hesse_failed')}, "
-                f"cov_posdef={_fmin_flag(fmin, 'has_posdef_covar')}, "
-                f"nfcn={_fmin_flag(fmin, 'nfcn')}, "
-                f"ngrad={_fmin_flag(fmin, 'ngrad')}"
-            )
-
-        for i, ncall in enumerate(max_calls):
-            if i > 0 and simplex_on_retry:
-                simplex_ncall = max(2000, ncall // 5)
-                if verbose:
-                    print(f"Retry {i}: running SIMPLEX with ncall={simplex_ncall} before MIGRAD")
-                self.m.simplex(ncall=simplex_ncall)
-                print(f"SIMPLEX attempt {i} completed, valid={self.m.valid}")
-
+        if pre_simplex:
+            self.m.simplex()
             if verbose:
-                print(f"Running MIGRAD attempt {i+1}/{len(max_calls)} with ncall={ncall}, strategy={strategy}, tol={tol}")
-            self.m.migrad(ncall=ncall)
-            _print_fmin_diagnostics(prefix=f"MIGRAD attempt {i+1} status")
+                print(self.m.fmin)
 
-            fmin = self.m.fmin
-            if self.m.valid and not fmin.has_reached_call_limit:
-                if verbose:
-                    print("MIGRAD converged.")
-                break
-
-            if verbose:
-                print(
-                    "MIGRAD did not fully converge "
-                    f"(valid={self.m.valid}, call_limit={fmin.has_reached_call_limit}, edm={fmin.edm:.3e})."
-                )
+        self.m.migrad(ncall=ncall, iterate=iterate, use_simplex=use_simplex)
+        if verbose:
+            print(self.m.fmin)
 
         # Optionally run HESSE only after a valid minimum is found.
         if hesse and self.m.valid:
             self.m.hesse()
-            _print_fmin_diagnostics(prefix="Post-HESSE status")
+            if verbose:
+                print(self.m.fmin)
 
         return self.m
     
