@@ -37,22 +37,9 @@ class NautilusSampler(BaseSampler):
         super().__init__(likelihood)
         from nautilus import Sampler
         
-        # 1. Build the Prior object using our Params helper
         self.prior = self.params.build_nautilus_prior()
         self.require_blobs = len(self.params.exported_derived_names) > 0
         
-        # 2. Define the likelihood wrapper
-        # Nautilus passes a dictionary of arguments if the prior was built with names
-        # def likelihood_wrapper(param_dict):
-        #     full_dict = self.params.get_full_dict(param_dict)
-        #     loglike = self.likelihood.get_loglike(full_dict) 
-        #     if self.require_blobs:
-        #         blobs = [full_dict[name] for name in self.params.exported_derived_names]
-        #         return loglike, blobs
-            
-        #     return loglike
-
-        # 3. Initialize Nautilus Sampler
         self.sampler = Sampler(
             self.prior, 
             self.likelihood_wrapper,
@@ -72,8 +59,18 @@ class NautilusSampler(BaseSampler):
         """Run the Nautilus sampling algorithm"""
         self.sampler.run(**kwargs)
         
-    def save(self, filename):
-        """Save posterior samples to a file"""
+    def save(self, filename, metadata=None):
+        """Save posterior samples to an HDF5 file.
+
+        Parameters
+        ----------
+        filename : str
+            Output path. A '.h5' extension is appended if not already present.
+        metadata : dict, optional
+            Extra scalar/string run info (e.g. sampler or fit settings) to
+            store as file attributes for provenance.
+        """
+        import h5py
 
         if self.require_blobs:
             points, log_w, log_l, blobs = self.sampler.posterior(return_blobs=True)
@@ -84,10 +81,20 @@ class NautilusSampler(BaseSampler):
         else:
             points, log_w, log_l = self.sampler.posterior()
             names = self.prior.keys
-        latex_names = [self.params.parameters[n].latex for n in names] 
+        latex_names = [self.params.parameters[n].latex for n in names]
 
-        np.savez(filename, points=points, log_weights=log_w, log_likelihoods=log_l,
-                 names=names, latex_names=latex_names)
+        if not filename.endswith('.h5'):
+            filename = filename + '.h5'
+
+        str_dtype = h5py.string_dtype(encoding='utf-8')
+        with h5py.File(filename, 'w') as f:
+            f.create_dataset('points', data=points)
+            f.create_dataset('log_weights', data=log_w)
+            f.create_dataset('log_likelihoods', data=log_l)
+            f.create_dataset('names', data=names, dtype=str_dtype)
+            f.create_dataset('latex_names', data=latex_names, dtype=str_dtype)
+            for key, value in (metadata or {}).items():
+                f.attrs[key] = _sanitize_attr(value)
         
 
 class MinuitMinimizer(BaseSampler):
@@ -96,8 +103,6 @@ class MinuitMinimizer(BaseSampler):
         super().__init__(likelihood)
         from iminuit import Minuit
             
-        # 1. Define the cost function (Total Chi2 = Chi2_data + Chi2_prior)
-        # Minuit will pass the parameters as positional arguments in the order of names
         def cost_function(*args):
             # Convert positional args to dictionary
             param_dict = dict(zip(self.params.sampled_param_names, args))
@@ -105,15 +110,12 @@ class MinuitMinimizer(BaseSampler):
             lp = self.log_prior(param_dict)
             if not np.isfinite(lp):
                 return np.inf
-
-            
             chi2_prior = -2.0 * lp
             # Get Data Chi2
             # Note: We use get_chi2 directly, not get_loglike 
             chi2_data = self.likelihood.get_chi2(full_dict)
             return chi2_data + chi2_prior
 
-        # 2. Setup Initial Values
 
         if seed_init is not None:
             np.random.seed(seed_init)
@@ -142,17 +144,13 @@ class MinuitMinimizer(BaseSampler):
                 print("This should almost never happen, as all sampled parameters should have a prior.")
                 init_values.append(p.value)
 
-        # 3. Initialize Minuit
-        # We pass the cost function, the starting values, and the names
         self.m = Minuit(cost_function, *init_values, name=self.params.sampled_param_names)
         
-        # 4. Configure Limits and Steps
         self.m.errordef = Minuit.LEAST_SQUARES # = 1.0 (for Chi2 minimization)
         
         for name in self.sampled_param_names:
             p = self.params.parameters[name]
             
-            # Set Limits (Critical for Uniform priors)
             if p.prior_type == 'uniform' and p.prior is not None:
                 self.m.limits[name] = p.prior
 
@@ -218,7 +216,7 @@ class MinuitMinimizer(BaseSampler):
                 elif reset_errors and val != 0:
                     self.m.errors[name] = abs(val) * 0.1
 
-    def run(self, hesse=False, strategy=1, tol=0.1, ncall=None, iterate=5,
+    def run(self, hesse=False, strategy=2, tol=0.1, ncall=1000000, iterate=20,
             use_simplex=True, print_level=1, pre_simplex=False, verbose=True):
         """
         Run the minimization.
@@ -307,3 +305,77 @@ class MinuitMinimizer(BaseSampler):
                     for j, name in enumerate(am_params_iz):
                         uncertainties[name] = float(am_errors[j])
         return best_fit, uncertainties
+
+    def save(self, filename, best_fit=None, uncertainties=None, return_am=True, metadata=None):
+        """Save the best-fit result to an HDF5 file.
+
+        Parameters
+        ----------
+        filename : str
+            Output path. A '.h5' extension is appended if not already present.
+        best_fit, uncertainties : dict, optional
+            Precomputed results from `get_map` to save as-is (avoids
+            recomputing the AM conditional covariance). If either is None,
+            `get_map(return_am=return_am)` is called to obtain both.
+        return_am : bool
+            Passed to `get_map` when `best_fit`/`uncertainties` are not
+            supplied. Ignored otherwise.
+        metadata : dict, optional
+            Extra scalar/string run info (e.g. fit settings) to store as
+            file attributes for provenance.
+        """
+        import h5py
+
+        if best_fit is None or uncertainties is None:
+            best_fit, uncertainties = self.get_map(return_am=return_am)
+
+        names = list(best_fit.keys())
+        values = np.array([best_fit[n] for n in names])
+        errors = np.array([uncertainties[n] for n in names])
+        latex_names = [self.params.parameters[n].latex for n in names]
+
+        if not filename.endswith('.h5'):
+            filename = filename + '.h5'
+
+        str_dtype = h5py.string_dtype(encoding='utf-8')
+        with h5py.File(filename, 'w') as f:
+            f.create_dataset('names', data=names, dtype=str_dtype)
+            f.create_dataset('latex_names', data=latex_names, dtype=str_dtype)
+            f.create_dataset('best_fit', data=values)
+            f.create_dataset('uncertainties', data=errors)
+
+            if self.m.covariance is not None:
+                # Only covers the free (sampled) parameters, not analytically
+                # marginalised ones — those only have per-z conditional
+                # covariances, not a single joint matrix with the free params.
+                f.create_dataset('covariance', data=np.array(self.m.covariance))
+                f.create_dataset('covariance_names', data=self.sampled_param_names, dtype=str_dtype)
+
+            fmin = self.m.fmin
+            f.attrs['valid'] = bool(self.m.valid)
+            f.attrs['edm'] = float(getattr(fmin, 'edm', np.nan))
+            f.attrs['fval'] = float(getattr(fmin, 'fval', np.nan))
+            f.attrs['nfcn'] = int(getattr(fmin, 'nfcn', -1))
+
+            for key, value in (metadata or {}).items():
+                f.attrs[key] = _sanitize_attr(value)
+
+def _sanitize_attr(value):
+    """Coerce a Python value into something h5py can store as an attribute.
+
+    argparse.Namespace values routinely include None, tuples, and lists of
+    tuples (e.g. --ellB), none of which h5py.attrs accepts directly.
+    """
+    if value is None:
+        return 'None'
+    if isinstance(value, (str, bytes, bool, int, float, np.integer, np.floating)):
+        return value
+    if isinstance(value, (list, tuple, np.ndarray)):
+        try:
+            arr = np.array(value)
+            if arr.dtype == object:
+                return str(value)
+            return arr
+        except Exception:
+            return str(value)
+    return str(value)
