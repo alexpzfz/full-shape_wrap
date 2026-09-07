@@ -498,7 +498,12 @@ class COMET(comet, BaseModel):
         kaiser_fact = (self.params['b1'] + self.params['f'] * mup**2)
         wdamping = self._W_kurt(kp, mup)
         res = {}
-        integrand = kaiser_fact * prefact_dict[diagram] * p2d * wdamping
+        # integrand = kaiser_fact * prefact_dict[diagram] * p2d * wdamping
+        integrand = kaiser_fact * prefact_dict[diagram]
+        if diagram == 'Pctr_a4':
+            # Remove octopole contribution from the integrand, since it is not mappable to the c0, c2, c4 basis.
+            integrand = integrand - 16/231 * self.params['f']**2 * eval_legendre(6, mup)
+        integrand = integrand * p2d * wdamping
         legendre = eval_legendre.outer(ell, mu) # shape (n_ell, nmu)
         r_ = 0.5 * np.einsum("ebc,db,b->dec", integrand, legendre,
                                 self.gl_weights) 
