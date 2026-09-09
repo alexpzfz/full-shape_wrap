@@ -144,15 +144,17 @@ class PowerSpectrumMultipoles(Observable):
         return ax
 
 class BispectrumScoccimarroMultipoles(Observable):
-    def __init__(self, tri, Bell, cov=None, nbar=None, cosmo_fid=None, Mpc_units=False, kmin=None, kmax=None, nmocks_cov=None):
+    def __init__(self, tri, Bell, cov=None, nbar=None, cosmo_fid=None, input_Mpc_units=False, save_Mpc_units=True, kmin=None, kmax=None, nmocks_cov=None):
         super().__init__(tri, Bell, cov, nbar, cosmo_fid, xmin=kmin, xmax=kmax, nmocks_cov=nmocks_cov)
-        if not Mpc_units:
+        if not input_Mpc_units and save_Mpc_units:
             assert getattr(self, 'h_fid') is not None, "h value is required to convert to Mpc units"
             self.x = [xi * self.h_fid for xi in self.x]
             self.y = [yi / self.h_fid**6 for yi in self.y]
             self.nbar = self.nbar * self.h_fid**3 if self.nbar is not None else None
             if cov is not None:
                 self.cov = self.cov / self.h_fid**12
+
+        self.Mpc_units = save_Mpc_units
         self.tri = self.x
         self.Bell = self.y
         self.ell = [2*i for i in range(self.n_obs)]
@@ -179,11 +181,11 @@ class BispectrumScoccimarroMultipoles(Observable):
         return ax
     
 class BispectrumSugiyamaMultipoles(Observable):
-    def __init__(self, pair, Bell, ell=None, cov=None, nbar=None, cosmo_fid=None, Mpc_units=False, kmin=None, kmax=None,
+    def __init__(self, pair, Bell, ell=None, cov=None, nbar=None, cosmo_fid=None, input_Mpc_units=False, save_Mpc_units=True, kmin=None, kmax=None,
                  wmat=None, pairwin=None, ellwin=None, kwinmin=None, kwinmax=None, nmocks_cov=None):
-        super().__init__(pair, Bell, cov, nbar, cosmo_fid, xmin=kmin, xmax=kmax, wmat=wmat, xwin=pairwin, 
+        super().__init__(pair, Bell, cov, nbar, cosmo_fid, xmin=kmin, xmax=kmax, wmat=wmat, xwin=pairwin,
                          xwinmin=kwinmin, xwinmax=kwinmax, nmocks_cov=nmocks_cov, nobswin=len(ellwin) if ellwin is not None else None)
-        if not Mpc_units:
+        if not input_Mpc_units and save_Mpc_units:
             assert getattr(self, 'h_fid') is not None, "h value is required to convert to Mpc units"
             self.x = [xi * self.h_fid for xi in self.x]
             self.y = [yi / self.h_fid**6 for yi in self.y]
@@ -191,7 +193,9 @@ class BispectrumSugiyamaMultipoles(Observable):
             if cov is not None:
                 self.cov = self.cov / self.h_fid**12
             if self.xwin is not None:
-                self.xwin = [xwini * self.h_fid for xwini in self.xwin] 
+                self.xwin = [xwini * self.h_fid for xwini in self.xwin]
+
+        self.Mpc_units = save_Mpc_units
         self.pair = self.x
         self.Bell = self.y
         self.ell = ell
@@ -220,7 +224,7 @@ class BispectrumSugiyamaMultipoles(Observable):
         
 
 class JointObservable(Observable):
-    def __init__(self, *observables, cov=None, cov_Mpc_units=False, nmocks_cov=None):
+    def __init__(self, *observables, cov=None, cov_input_Mpc_units=False, nmocks_cov=None):
         self.observables = observables # this is a list of Observable instances
         # list of x and y for each observable
         x = []
@@ -233,12 +237,15 @@ class JointObservable(Observable):
 
         # for the moment only supporting two observables
         obs1, obs2 = observables
+        assert all(obs.Mpc_units == obs1.Mpc_units for obs in observables), "All observables must have the same Mpc units setting"
+        self.Mpc_units = obs1.Mpc_units
         if cov is None:
             print("No covariance matrix provided for joint observable, constructing block diagonal covariance matrix")
             cov = self.get_block_cov(obs1.cov, obs2.cov)
         else:
-            assert cov.shape == (obs1.n_data + obs2.n_data, obs1.n_data + obs2.n_data), "Covariance matrix has wrong shape" 
-            if not cov_Mpc_units:
+            assert cov.shape == (obs1.n_data + obs2.n_data, obs1.n_data + obs2.n_data), "Covariance matrix has wrong shape"
+            if not cov_input_Mpc_units and self.Mpc_units:
+                assert getattr(self, 'h_fid') is not None, "h value is required to convert to Mpc units"
                 hpower1 = hpower_dict.get(type(obs1).__name__, None)
                 hpower2 = hpower_dict.get(type(obs2).__name__, None)
                 hfact1 = self.h_fid**hpower1
@@ -247,11 +254,11 @@ class JointObservable(Observable):
                 cov[obs1.n_data:, obs1.n_data:] /= hfact2**2
                 cov[:obs1.n_data, obs1.n_data:] /= hfact1 * hfact2
                 cov[obs1.n_data:, :obs1.n_data] /= hfact1 * hfact2
-            
+
             # assign the covariance blocks to the corresponding observables (mostly for plotting purposes, since the full covariance is stored in the joint observable)
             obs1.cov = cov[:obs1.n_data, :obs1.n_data]
             obs2.cov = cov[obs1.n_data:, obs1.n_data:]
-                
+
         super().__init__(x, y, cov=cov, nbar=obs1.nbar, cosmo_fid=obs1.cosmo_fid, nmocks_cov=nmocks_cov)
 
     def get_block_cov(self, cov1, cov2):
