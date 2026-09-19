@@ -1,6 +1,16 @@
 import numpy as np
 from observables import Observable, PowerSpectrumMultipoles
+from utils import NonFiniteTheoryError
 import params
+
+# Failures that mean "the model could not be evaluated at this point", as
+# opposed to a bug: the emulator was pushed far outside its calibration range
+# and returned inf/nan, or the resulting marginalisation matrix could not be
+# made positive definite. These are turned into a rejected point rather than
+# being allowed to kill the sampler (and, with a multiprocessing pool, the
+# whole job).
+THEORY_FAILURES = (NonFiniteTheoryError, np.linalg.LinAlgError,
+                   FloatingPointError, OverflowError)
 
 class Likelihood:
     """Base class for likelihoods
@@ -207,12 +217,31 @@ class Likelihood:
             total_chi2 += chi2
         return total_chi2 
 
+    # Only the first few rejected points are reported, to keep the logs of a
+    # long sampling run readable.
+    _max_reported_failures = 10
+
     def get_loglike(self, params):
-        chi2 = self.get_chi2(params)
+        try:
+            chi2 = self.get_chi2(params)
+        except THEORY_FAILURES as exc:
+            self._report_failure(exc)
+            return -np.inf
         loglike = -0.5 * chi2
-        if np.isnan(loglike):
+        if not np.isfinite(loglike):
             loglike = -np.inf
         return loglike
+
+    def _report_failure(self, exc):
+        n = getattr(self, '_n_failures', 0) + 1
+        self._n_failures = n
+        if n <= self._max_reported_failures:
+            print(f'Warning! Rejecting point (log-like = -inf), the model '
+                  f'could not be evaluated there: {type(exc).__name__}: {exc}',
+                  flush=True)
+            if n == self._max_reported_failures:
+                print('Warning! Further rejections of this kind will not be '
+                      'reported individually.', flush=True)
 
     @staticmethod
     def marg_chi2(diff, dcov_chol, p0_vec, pcov_inv, log_detpcov, design_mat,
@@ -311,6 +340,11 @@ class Likelihood:
             else:
                 diag_to_marg = self.emu._extra_diagrams_to_marg[base_name]
                 bx = factor # Apply reparametrization factor if needed
+                if not self.emu.use_Mpc:
+                    # a0/a2/a4 carry the same units as c0/c2/c4, which get 1/h^2 from
+                    # _get_bias_coeff_for_AM; PX_ell_extra leaves that factor out.
+                    h = np.atleast_1d(self.emu.params['h'])
+                    bx = bx / h[iz if len(self.z_list) > 1 else 0]**2
             
             if base_name not in cache:
                 pk_observables = [obs.observables[0] if obs.__class__.__name__ == 'JointObservable' else obs for obs in self.observables]

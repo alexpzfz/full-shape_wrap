@@ -114,3 +114,47 @@ def cut_window(win, x, ell, xwin, ellwin, xmin=-np.inf, xmax=np.inf, xwinmin=-np
     win_cut = win_cut[:, mask_in]
     
     return win_cut
+
+class NonFiniteTheoryError(ValueError):
+    """Raised when the theory prediction is not finite at the requested point.
+
+    The emulator is only calibrated over a finite range of its input
+    parameters (see ``emu.params_ranges``); far outside it the emulated
+    ingredients can over/underflow and return inf/nan. Downstream code then
+    either raises an opaque error (``make_interp_spline`` rejects non-finite
+    input) or silently produces a nan chi2, so the condition is detected
+    explicitly here and turned into a single, catchable exception that the
+    likelihood converts into a rejected point (log-likelihood = -inf).
+    """
+
+
+def check_finite(arrays, what, params=None):
+    """Raise NonFiniteTheoryError if any entry of ``arrays`` is not finite.
+
+    Parameters
+    ----------
+    arrays : array_like or sequence/dict of array_like
+        Quantities to validate.
+    what : str
+        Short label of what is being checked, used in the error message.
+    params : dict, optional
+        Parameters the prediction was evaluated at; a few cosmological ones
+        are added to the message to make the offending point identifiable.
+    """
+    if isinstance(arrays, dict):
+        arrays = list(arrays.values())
+    elif not isinstance(arrays, (list, tuple)):
+        arrays = [arrays]
+
+    for arr in arrays:
+        arr = np.asarray(arr, dtype=float)
+        if np.all(np.isfinite(arr)):
+            continue
+        n_bad = int(np.count_nonzero(~np.isfinite(arr)))
+        msg = f"{what}: {n_bad}/{arr.size} non-finite entries"
+        if params is not None:
+            shown = {p: np.atleast_1d(params[p]).tolist() for p in
+                     ('wc', 'wb', 'ns', 'h', 'As', 'w0', 'wa', 's12', 'f',
+                      'q_lo', 'q_tr', 'b1', 'avir') if p in params}
+            msg += f" at {shown}"
+        raise NonFiniteTheoryError(msg)

@@ -1,5 +1,6 @@
 import numpy as np
 from observables import Observable
+from likelihood import THEORY_FAILURES
 from params import Params
 
 class BaseSampler:
@@ -112,8 +113,17 @@ class MinuitMinimizer(BaseSampler):
                 return np.inf
             chi2_prior = -2.0 * lp
             # Get Data Chi2
-            # Note: We use get_chi2 directly, not get_loglike 
-            chi2_data = self.likelihood.get_chi2(full_dict)
+            # Note: We use get_chi2 directly, not get_loglike
+            # A point where the model cannot be evaluated (emulator far outside
+            # its range) is reported as infinitely bad rather than crashing the
+            # minimization.
+            try:
+                chi2_data = self.likelihood.get_chi2(full_dict)
+            except THEORY_FAILURES as exc:
+                self.likelihood._report_failure(exc)
+                return np.inf
+            if not np.isfinite(chi2_data):
+                return np.inf
             return chi2_data + chi2_prior
 
 
@@ -306,7 +316,7 @@ class MinuitMinimizer(BaseSampler):
                         uncertainties[name] = float(am_errors[j])
         return best_fit, uncertainties
 
-    def save(self, filename, best_fit=None, uncertainties=None, return_am=True, metadata=None):
+    def save(self, filename, best_fit=None, uncertainties=None, return_am=True, metadata=None, save_txt=True):
         """Save the best-fit result to an HDF5 file.
 
         Parameters
@@ -323,6 +333,10 @@ class MinuitMinimizer(BaseSampler):
         metadata : dict, optional
             Extra scalar/string run info (e.g. fit settings) to store as
             file attributes for provenance.
+        save_txt : bool
+            If True, also write a '.txt' file (same basename) with the
+            Minuit fmin/params tables, i.e. the same summary Minuit prints
+            to stdout when verbose=True.
         """
         import h5py
 
@@ -336,6 +350,14 @@ class MinuitMinimizer(BaseSampler):
 
         if not filename.endswith('.h5'):
             filename = filename + '.h5'
+
+        if save_txt:
+            txt_filename = filename[:-len('.h5')] + '.txt'
+            with open(txt_filename, 'w') as f:
+                f.write(str(self.m.fmin))
+                f.write('\n\n')
+                f.write(str(self.m.params))
+                f.write('\n')
 
         str_dtype = h5py.string_dtype(encoding='utf-8')
         with h5py.File(filename, 'w') as f:
@@ -366,6 +388,8 @@ def _sanitize_attr(value):
     argparse.Namespace values routinely include None, tuples, and lists of
     tuples (e.g. --ellB), none of which h5py.attrs accepts directly.
     """
+    import h5py
+
     if value is None:
         return 'None'
     if isinstance(value, (str, bytes, bool, int, float, np.integer, np.floating)):
@@ -375,6 +399,10 @@ def _sanitize_attr(value):
             arr = np.array(value)
             if arr.dtype == object:
                 return str(value)
+            if arr.dtype.kind in ('U', 'S'):
+                # h5py can't map numpy fixed-width string dtypes to an HDF5
+                # type directly; use its variable-length string dtype instead.
+                return np.array(value, dtype=h5py.string_dtype(encoding='utf-8'))
             return arr
         except Exception:
             return str(value)

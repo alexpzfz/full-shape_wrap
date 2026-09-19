@@ -3,6 +3,7 @@ import numpy as np
 from observables import PowerSpectrumMultipoles, BispectrumScoccimarroMultipoles, BispectrumSugiyamaMultipoles, JointObservable
 from scipy.special import eval_legendre
 from scipy.interpolate import UnivariateSpline, make_interp_spline
+from utils import check_finite
 
 class BaseModel:
     """Base class for models"""
@@ -131,6 +132,9 @@ class COMET(comet, BaseModel):
             k_eval = self.get_kvec_compression(min(k_all), max(k_all))
             pell_eval = self.Pell(k_eval, params, ell_all, de_model=de_model)
             pell_list = np.stack([pell_eval[f'ell{ll}'] for ll in ell_all], axis=1)
+            # make_interp_spline raises an opaque ValueError on non-finite input;
+            # flag it here instead so the likelihood can reject the point.
+            check_finite(pell_list, 'Pell', self.params)
             spline = make_interp_spline(k_eval, pell_list, axis=0)(k_all) #shapke nk nell
             pell_batched = {f'ell{ll}': spline[:, i, ...] for i, ll in enumerate(ell_all)}
 
@@ -202,6 +206,7 @@ class COMET(comet, BaseModel):
             k_eval = self.get_kvec_compression(min(k_all), max(k_all))
             pX_eval = px_ell_func(k_eval, params, ell_all, diagram, de_model=de_model)
             pX_list = np.stack([pX_eval[f'ell{ll}'] for ll in ell_all], axis=1)
+            check_finite(pX_list, f'PX_ell[{diagram}]', self.params)
             spline = make_interp_spline(k_eval, pX_list, axis=0)(k_all)
             pX_batched = {f'ell{ll}': spline[:, i, ...] for i, ll in enumerate(ell_all)}
             
