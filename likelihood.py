@@ -25,11 +25,16 @@ class Likelihood:
         Analytical marginalization parameters
     am_sample : bool, default True
         Whether to sample AM parameters conditionally
+    jeffreys : bool, default False
+        Use a Jeffreys prior sqrt(det(D^T C^-1 D)) on the AM parameters. Their
+        Gaussian priors are ignored (P^-1 = 0), so the marginalised chi2 is the
+        profile chi2. A Gaussian prior width of np.inf also gives a flat prior
+        (P^-1 = 0) for that parameter.
     conditional_prior : callable, optional
         A function that checks prior conditions on the full parameter dict
     """
     def __init__(self, observables, params, am_params=None,
-                 am_sample=True, conditional_prior=None):
+                 am_sample=True, jeffreys=False, conditional_prior=None):
         self.observables = observables if isinstance(observables, list) else [observables]
         # sort observables by redshift
         if len(self.observables) > 1:
@@ -70,6 +75,7 @@ class Likelihood:
         self.do_am = False
         #self.am_params = am_params
         self.am_sample = am_sample
+        self.jeffreys = jeffreys
         self.am_sample_mode = None if not self.am_sample else 'sample' # 'sample' or 'map'
         if am_params is not None:
             self.do_am = True
@@ -110,11 +116,18 @@ class Likelihood:
                 
                 p0 = np.array([self.params.parameters[param].prior[0] for param in am_iz])
                 sigmas = np.array([self.params.parameters[param].prior[1] for param in am_iz])
-                inv_cov = np.diag(1.0 / sigmas**2)
-                log_det_cov = float(2.0 * np.sum(np.log(sigmas)))
+                # an infinite width means a flat prior: zero precision, and no
+                # contribution to log det(P) (an irrelevant constant)
+                flat = np.isinf(sigmas) | self.jeffreys
+                p0[flat] = 0.0
+                inv_cov = np.diag(np.where(flat, 0.0, 1.0 / sigmas**2))
+                log_det_cov = float(2.0 * np.sum(np.log(sigmas[~flat])))
                 self.am_params_0.append(p0)
                 self.am_inv_cov.append(inv_cov)
                 self.am_log_det_cov.append(log_det_cov)
+            if self.jeffreys:
+                print('Using Jeffreys priors on the AM parameters: their Gaussian '
+                      'priors are ignored (flat priors).')
 
 
             #  # check that all am_params are in bias, counterterms or stochastic
@@ -207,11 +220,13 @@ class Likelihood:
 
                 dm_iz = self.get_design_matrix(params, dm_cache, i)  # This should be modified to get the correct design matrix for each observable if needed
                 if not self.am_sample:
-                    chi2 = self.marg_chi2(delta, self.lcovs[i], self.am_params_0[i], self.am_inv_cov[i], self.am_log_det_cov[i], dm_iz)
+                    chi2 = self.marg_chi2(delta, self.lcovs[i], self.am_params_0[i], self.am_inv_cov[i], self.am_log_det_cov[i], dm_iz,
+                                          jeffreys=self.jeffreys)
                     self._last_am_cond_covs.append(None)
                 else:
                     chi2, cond_mean, cond_cov = self.marg_chi2(delta, self.lcovs[i], self.am_params_0[i], self.am_inv_cov[i],
-                                                                self.am_log_det_cov[i], dm_iz, return_cond_mean_cov=True)
+                                                                self.am_log_det_cov[i], dm_iz, jeffreys=self.jeffreys,
+                                                                return_cond_mean_cov=True)
                     self._last_am_cond_covs.append(cond_cov)
                     self.sample_cond_am(params, cond_mean, cond_cov, iz=i, mode=self.am_sample_mode)
             total_chi2 += chi2
@@ -245,7 +260,7 @@ class Likelihood:
 
     @staticmethod
     def marg_chi2(diff, dcov_chol, p0_vec, pcov_inv, log_detpcov, design_mat,
-                  return_cond_mean_cov=False):
+                  jeffreys=False, return_cond_mean_cov=False):
         # if not np.all(np.isfinite(diff)):
         #     raise np.linalg.LinAlgError("diff contains NaN or Inf values in marg_chi2")
         # if not np.all(np.isfinite(dcov_chol)):
@@ -276,15 +291,30 @@ class Likelihood:
         #         "lambda contains NaN or Inf in marg_chi2 after adding prior precision; "
         #         f"max|D^T C^-1 D|={np.max(np.abs(dt_cinv_d)):.3e}, max|P^-1|={np.max(np.abs(pcov_inv)):.3e}"
         #     )
-        lamb = make_posdef(lamb, matrix_name='lambda')
-        lamb_chol = np.linalg.cholesky(lamb)
+        if not jeffreys:
+            lamb = make_posdef(lamb, matrix_name='lambda')
+            lamb_chol = np.linalg.cholesky(lamb)
+        else:
+            # No jitter here: with flat priors it would act as a hidden prior.
+            # A failure means the data do not constrain some AM parameter.
+            try:
+                lamb_chol = np.linalg.cholesky(lamb)
+            except np.linalg.LinAlgError:
+                raise np.linalg.LinAlgError(
+                    'D^T C^-1 D is singular with Jeffreys priors: some AM '
+                    'parameter is not constrained by the data (degenerate '
+                    'design matrix)') from None
         # log(det(lamb)) = 2*sum(log(diag(L))) -- avoids overflow for large nam.
         log_detlamb = 2.0 * np.sum(np.log(np.diag(lamb_chol)))
         b = design_mat.T @ get_Cib(dcov_chol, diff) + pcov_inv @ p0_vec
         chi2 =  get_bCib(dcov_chol, diff)
         chi2 = chi2 + p0_vec.T @ pcov_inv @ p0_vec
         chi2 = chi2  - get_bCib(lamb_chol, b)
-        chi2 = chi2 + log_detlamb + log_detpcov
+        # With a Jeffreys prior sqrt(det(lamb)) on the AM parameters (flat
+        # priors, lamb = D^T C^-1 D), the det(lamb)^(-1/2) from the Gaussian
+        # integral cancels exactly.
+        if not jeffreys:
+            chi2 = chi2 + log_detlamb + log_detpcov
         chi2 = float(np.asarray(chi2).reshape(()))
         if return_cond_mean_cov:
             # Here res is already centered on p0_vec, so mean is p0_vec + lamb^{-1} b.

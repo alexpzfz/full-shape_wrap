@@ -548,9 +548,19 @@ class Params:
         return partial(self._compute_reparam, name=name)
         
 
+    def is_linear_param(self, base):
+        """Whether a parameter (base name) enters the model linearly, i.e. it
+        can be analytically marginalised."""
+        return (base in getattr(self.emu, 'diagrams_to_marg', {})
+                or base in getattr(self.emu, '_extra_diagrams_to_marg', {})
+                or base in ('NB0', 'MB0'))
+
     def use_reparametrization(self, bias_mode='ap+sigma_12', counterterms_mode='ap+sigma_12',
                               stochastic_mode='ap', third_oder_bias_power=4.0, sigmaR_ref=1.0,
-                              bias_linear_only=False):
+                              bias_linear_only=False, skip_linear_params=False):
+        # skip_linear_params: only reparametrise the parameters that enter the
+        # model non-linearly, keeping the linear ones (see is_linear_param) in
+        # their original form, e.g. to combine them with Jeffreys priors.
 
         # verify that the specified modes are valid
         valid_modes = ['ap', 'sigma_12', 'ap+sigma_12', 'none']
@@ -561,6 +571,9 @@ class Params:
             raise ValueError(f"Invalid counterterms_mode {counterterms_mode}. Must be one of {valid_modes}.")
         if stochastic_mode not in valid_modes:
             raise ValueError(f"Invalid stochastic_mode {stochastic_mode}. Must be one of {valid_modes}.") 
+        if bias_linear_only and skip_linear_params:
+            raise ValueError("bias_linear_only and skip_linear_params are incompatible: "
+                             "no bias parameter would be reparametrized.")
         self.use_reparam = True
         self.reparam_bias_mode = bias_mode
         self.reparam_counterterms_mode = counterterms_mode
@@ -596,8 +609,15 @@ class Params:
                 latex = add_iz_to_latex(r"\sigma_{8}", iz) if self.nz > 1 else r"\sigma_{8}"
                 self.set_derived_param(name, partial(self.get_sigma_8, iz=iz), requires_emu_eval=True, latex=latex, exported=True)
 
+        if skip_linear_params:
+            groups = (self.bias_params, self.counterterm_params, self.stochastic_params)
+            skipped = sorted({b for g in groups for b in self.get_base_names(g) if self.is_linear_param(b)})
+            print(f"Reparametrization: keeping linear parameters in their original form: {skipped}")
+
         if reparam_counterterms: 
             for base in self.get_base_names(self.counterterm_params):
+                if skip_linear_params and self.is_linear_param(base):
+                    continue
                 for iz in range(self.nz):
                     name_reparam = f"{base}_r_{iz}" if self.nz > 1 else f"{base}_r"
                     target_name = f"{base}_{iz}" if self.nz > 1 else base
@@ -610,6 +630,8 @@ class Params:
                 if bias_linear_only:
                     if base not in ['g21', 'bGam3', 'btd', 'btdt']:
                         continue
+                if skip_linear_params and self.is_linear_param(base):
+                    continue
                 for iz in range(self.nz):
                     name_reparam = f"{base}_r_{iz}" if self.nz > 1 else f"{base}_r"
                     target_name = f"{base}_{iz}" if self.nz > 1 else base
@@ -626,6 +648,8 @@ class Params:
             
         if reparam_stochastic:
             for base in self.get_base_names(self.stochastic_params):
+                if skip_linear_params and self.is_linear_param(base):
+                    continue
                 for iz in range(self.nz):
                     name_reparam = f"{base}_r_{iz}" if self.nz > 1 else f"{base}_r"
                     target_name = f"{base}_{iz}" if self.nz > 1 else base

@@ -64,3 +64,5 @@ sampler.save('chain.npz')
 ## Analytical marginalization
 
 Passing `am_params` to `Likelihood` marginalizes those nuisance parameters analytically (assuming they enter the model linearly, with a Gaussian prior) instead of sampling them directly, which significantly speeds up posterior exploration. The marginalized parameters can still be reconstructed afterward (sampled from their conditional posterior, or read off as a MAP estimate) via `Likelihood.sample_cond_am`.
+
+With `jeffreys=True`, the Gaussian priors of the marginalized parameters are ignored and replaced by a Jeffreys prior $\propto\sqrt{\det(D^T C^{-1} D)}$. This cancels the $\log\det$ term that causes prior-volume projection effects, so the marginalized $\chi^2$ reduces to the profile (best-fit) $\chi^2$. The data must constrain every marginalized parameter; otherwise the point is rejected with a `LinAlgError`. Without Jeffreys priors, a flat prior on a parameter can be set by giving its Gaussian prior a width of `np.inf`.
