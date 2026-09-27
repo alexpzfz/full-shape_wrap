@@ -501,7 +501,8 @@ class COMET(comet, BaseModel):
 
         prefact_dict = {'Pctr_a0': self.params['b1'], 'Pctr_a2': self.params['f'] * mup**2, 'Pctr_a4': self.params['f'] * mup**4}
         kaiser_fact = (self.params['b1'] + self.params['f'] * mup**2)
-        wdamping = self._W_kurt(kp, mup)
+        # The large-scale damping only belongs to the VDG model (EFT has no avir/sv).
+        wdamping = self._W_kurt(kp, mup) if 'VDG_infty' in self.model else 1.0
         res = {}
         # integrand = kaiser_fact * prefact_dict[diagram] * p2d * wdamping
         integrand = kaiser_fact * prefact_dict[diagram]
