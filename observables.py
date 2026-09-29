@@ -87,6 +87,16 @@ class Observable:
     def n_data(self):
         return sum(len(yi) for yi in self.y)
 
+    def plot_units(self, h_units):
+        """Conversion from the stored units (Mpc or Mpc/h, see Mpc_units) to the
+        requested plotting units: k -> k / factor, P -> P * factor**3,
+        B -> B * factor**6. Returns (factor, h_units), the latter being the
+        units actually plotted, i.e. the stored ones if h_fid is unknown."""
+        stored_h_units = not getattr(self, 'Mpc_units', True)
+        if self.h_fid is None or h_units == stored_h_units:
+            return 1.0, stored_h_units
+        return (self.h_fid if h_units else 1.0 / self.h_fid), h_units
+
 class PowerSpectrumMultipoles(Observable):
     """Power spectrum multipoles"""
     def __init__(self, k, Pell, ell=None, cov=None, nbar=None, cosmo_fid=None, input_Mpc_units=False, save_Mpc_units=True, kmin=None, kmax=None,
@@ -128,9 +138,8 @@ class PowerSpectrumMultipoles(Observable):
         import matplotlib.pyplot as plt
         if ax is None:
             fig, ax = plt.subplots()
-        factor = 1.0
-        if h_units and getattr(self, 'h_fid') is not None:
-            factor = self.h_fid
+        factor, h_units = self.plot_units(h_units)
+        if h_units:
             ax.set_xlabel(r'$k ~ [h ~ \mathrm{Mpc}^{-1}]$')
             ax.set_ylabel(r'$k P_\ell(k) ~ [h^{-2} ~ \mathrm{Mpc}^2]$')
         else:
@@ -164,9 +173,8 @@ class BispectrumScoccimarroMultipoles(Observable):
         import matplotlib.pyplot as plt
         if ax is None:
             fig, ax = plt.subplots()
-        factor = 1.0
-        if h_units and getattr(self, 'h_fid') is not None:
-            factor = self.h_fid
+        factor, h_units = self.plot_units(h_units)
+        if h_units:
             ax.set_xlabel(r'Triangle index')
             ax.set_ylabel(r'$B_\ell(k_1, k_2, k_3) ~ [h^{-6} ~ \mathrm{Mpc}^6]$')
         else:
@@ -206,10 +214,9 @@ class BispectrumSugiyamaMultipoles(Observable):
         import matplotlib.pyplot as plt
         if ax is None:
             fig, ax = plt.subplots()
-        factor = 1.0
-        if h_units and getattr(self, 'h_fid') is not None:
-            factor = self.h_fid
-            ax.set_xlabel(r'$k ~ [h^{-1} ~ \mathrm{Mpc}]$')
+        factor, h_units = self.plot_units(h_units)
+        if h_units:
+            ax.set_xlabel(r'$k ~ [h ~ \mathrm{Mpc}^{-1}]$')
             ax.set_ylabel(r'$k^2 B_{\ell_1 \ell_2 L} ~ [h^{-4} ~ \mathrm{Mpc}^4]$')
         else:
             ax.set_xlabel(r'$k ~ [\mathrm{Mpc}^{-1}]$')
