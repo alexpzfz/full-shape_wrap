@@ -60,7 +60,7 @@ class NautilusSampler(BaseSampler):
         """Run the Nautilus sampling algorithm"""
         self.sampler.run(**kwargs)
         
-    def save(self, filename, metadata=None):
+    def save(self, filename, metadata=None, save_txt=True):
         """Save posterior samples to an HDF5 file.
 
         Parameters
@@ -70,6 +70,9 @@ class NautilusSampler(BaseSampler):
         metadata : dict, optional
             Extra scalar/string run info (e.g. sampler or fit settings) to
             store as file attributes for provenance.
+        save_txt : bool
+            If True, also write a '.txt' file (same basename) with a summary
+            table of the weighted posterior (see `summary_table`).
         """
         import h5py
 
@@ -87,6 +90,11 @@ class NautilusSampler(BaseSampler):
         if not filename.endswith('.h5'):
             filename = filename + '.h5'
 
+        if save_txt:
+            txt_filename = filename[:-len('.h5')] + '.txt'
+            with open(txt_filename, 'w', encoding='utf-8') as f:
+                f.write(self.summary_table(points, log_w, log_l, names))
+
         str_dtype = h5py.string_dtype(encoding='utf-8')
         with h5py.File(filename, 'w') as f:
             f.create_dataset('points', data=points)
@@ -96,7 +104,83 @@ class NautilusSampler(BaseSampler):
             f.create_dataset('latex_names', data=latex_names, dtype=str_dtype)
             for key, value in (metadata or {}).items():
                 f.attrs[key] = _sanitize_attr(value)
-        
+
+    def summary_table(self, points, log_w, log_l, names):
+        """Return a text table of weighted posterior statistics per parameter.
+
+        Columns: argmax (sample with the highest log-posterior, i.e. log-likelihood
+        plus log-prior of the sampled parameters), mean, std, median, and the
+        lower/upper 1sigma and 2sigma errors, given as offsets from the median to
+        the (16, 84) and (2.5, 97.5) weighted percentiles, i.e. the edges of the
+        central 68% and 95% credible intervals.
+        """
+        w = np.exp(log_w - np.max(log_w))
+        w /= np.sum(w)
+
+        n_sampled = len(self.prior.keys)
+        log_post = np.array([
+            ll + self.log_prior(dict(zip(self.prior.keys, pt[:n_sampled])))
+            for pt, ll in zip(points, log_l)
+        ])
+        i_max = np.argmax(log_post)
+
+        header = ['param', 'argmax', 'mean', 'std', 'median', '-1σ', '+1σ', '-2σ', '+2σ']
+        rows = []
+        for j, name in enumerate(names):
+            x = points[:, j]
+            mean = np.sum(w * x)
+            std = np.sqrt(np.sum(w * (x - mean) ** 2))
+            q025, q16, q50, q84, q975 = _weighted_quantile(x, w, [0.025, 0.16, 0.5, 0.84, 0.975])
+            # Show every value of a row to the precision of its 1sigma error
+            # (3 significant figures of the smaller side).
+            err = min(q50 - q16, q84 - q50)
+            if np.isfinite(err) and err > 0:
+                dec = int(np.clip(2 - np.floor(np.log10(err)), 0, 12))
+                fmt_v = lambda v, sign='': f'{v:{sign}.{dec}f}'
+            else:
+                fmt_v = lambda v, sign='': f'{v:{sign}.6g}'
+            rows.append([name] + [fmt_v(v) for v in (x[i_max], mean, std, q50)]
+                        + [fmt_v(v, '+') for v in (q16 - q50, q84 - q50, q025 - q50, q975 - q50)])
+
+        widths = [max(len(r[k]) for r in [header] + rows) for k in range(len(header))]
+        # The +/- columns of each interval are drawn as one cell under a group header.
+        n_single = 5
+        groups = [('68% (1σ)', widths[5] + widths[6] + 2), ('95% (2σ)', widths[7] + widths[8] + 2)]
+        for g, (label, wd) in enumerate(groups):
+            if len(label) > wd:  # widen the '+' column so the group label fits
+                widths[6 + 2 * g] += len(label) - wd
+                groups[g] = (label, len(label))
+
+        cell_w = widths[:n_single] + [wd for _, wd in groups]
+        rule = lambda l, m, r: l + m.join('─' * (wd + 2) for wd in cell_w) + r
+
+        def fmt(r):
+            cells = [c.ljust(wd) if k == 0 else c.rjust(wd)
+                     for k, (c, wd) in enumerate(zip(r[:n_single], widths))]
+            cells += [f'{r[5 + 2 * g].rjust(widths[5 + 2 * g])}  {r[6 + 2 * g].rjust(widths[6 + 2 * g])}'
+                      for g in range(len(groups))]
+            return '│ ' + ' │ '.join(cells) + ' │'
+
+        group_row = ['' for _ in range(n_single)] + [label.center(wd) for label, wd in groups]
+        group_row = '│ ' + ' │ '.join(c.ljust(wd) for c, wd in zip(group_row, cell_w)) + ' │'
+
+        lines = ['Posterior summary',
+                 f'  max log-posterior      = {log_post[i_max]:.6g}  '
+                 f'(log-likelihood = {log_l[i_max]:.6g})',
+                 f'  log-evidence           = {self.sampler.log_z:.6g}',
+                 f'  effective sample size  = {self.sampler.n_eff:.1f}',
+                 '  argmax: sample with the highest log-posterior',
+                 '  ±1σ, ±2σ: offsets from the median to the edges of the central 68% and 95% '
+                 'credible intervals',
+                 '',
+                 rule('┌', '┬', '┐'),
+                 group_row,
+                 fmt(header),
+                 rule('├', '┼', '┤')]
+        lines += [fmt(r) for r in rows]
+        lines.append(rule('└', '┴', '┘'))
+        return '\n'.join(lines) + '\n'
+
 
 class MinuitMinimizer(BaseSampler):
     """Wrapper for the iMinuit minimizer"""
@@ -381,6 +465,13 @@ class MinuitMinimizer(BaseSampler):
 
             for key, value in (metadata or {}).items():
                 f.attrs[key] = _sanitize_attr(value)
+
+def _weighted_quantile(x, w, q):
+    """Quantiles `q` of samples `x` with normalised weights `w`."""
+    order = np.argsort(x)
+    x, w = x[order], w[order]
+    cdf = np.cumsum(w) - 0.5 * w
+    return np.interp(q, cdf, x)
 
 def _sanitize_attr(value):
     """Coerce a Python value into something h5py can store as an attribute.
