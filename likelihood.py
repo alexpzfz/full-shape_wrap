@@ -354,6 +354,23 @@ class Likelihood:
         if cache is None:
             cache = {}
 
+        # Collect the AM diagrams needed across all params that are not cached
+        # yet. One PX call serves the whole set (and all redshift bins).
+        diags_needed = {}
+        for param in am_params_iz:
+            base_name = _base_param_name(param)
+            if base_name in cache or base_name in diags_needed:
+                continue
+            if base_name not in ['a0', 'a2', 'a4']:
+                diags_needed[base_name] = self.emu.diagrams_to_marg[base_name]
+            else:
+                diags_needed[base_name] = self.emu._extra_diagrams_to_marg[base_name]
+
+        if diags_needed:
+            pk_observables = [obs.observables[0] if obs.__class__.__name__ == 'JointObservable' else obs for obs in self.observables]
+            cache.update(self.emu.predict_power_spectrum_X_multipoles_batch(
+                pk_observables, comet_params, diags_needed, de_model=self.de_model))
+
         for i, param in enumerate(am_params_iz):
             base_name = _base_param_name(param)
             if '_r_' in param or param.endswith('_r'):
@@ -361,24 +378,20 @@ class Likelihood:
             else:
                 factor = 1.0
 
-            if base_name not in ['a0', 'a2', 'a4']: 
+            if base_name not in ['a0', 'a2', 'a4']:
                 diag_to_marg = self.emu.diagrams_to_marg[base_name]
                 bx = self.emu._get_bias_coeff_for_AM(diag_to_marg)   
                 bx = bx * factor# Apply reparametrization factor if needed
                 if len(self.z_list) > 1:
                     bx = bx[..., iz] # Get the bias coefficient for the correct redshift bin
             else:
-                diag_to_marg = self.emu._extra_diagrams_to_marg[base_name]
                 bx = factor # Apply reparametrization factor if needed
                 if not self.emu.use_Mpc:
                     # a0/a2/a4 carry the same units as c0/c2/c4, which get 1/h^2 from
                     # _get_bias_coeff_for_AM; PX_ell_extra leaves that factor out.
                     h = np.atleast_1d(self.emu.params['h'])
                     bx = bx / h[iz if len(self.z_list) > 1 else 0]**2
-            
-            if base_name not in cache:
-                pk_observables = [obs.observables[0] if obs.__class__.__name__ == 'JointObservable' else obs for obs in self.observables]
-                cache[base_name] = self.emu.predict_power_spectrum_X_multipoles(pk_observables, comet_params, diag_to_marg, de_model=self.de_model)
+
             px_ell = cache[base_name][iz]
 
             nx = px_ell.ndim

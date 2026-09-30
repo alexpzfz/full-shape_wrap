@@ -167,6 +167,28 @@ class COMET(comet, BaseModel):
         return preds
     
     def predict_power_spectrum_X_multipoles(self, observables, params, diagram, de_model):
+        """Back-compat single-label shim around `predict_power_spectrum_X_multipoles_batch`."""
+        return self.predict_power_spectrum_X_multipoles_batch(
+            observables, params, {'X': diagram}, de_model)['X']
+
+    def predict_power_spectrum_X_multipoles_batch(self, observables, params, am_diagrams, de_model):
+        """Evaluate multiple AM power spectrum design-matrix contributions in one shot.
+
+        `am_diagrams` maps each AM label (e.g. 'c0', 'cnlo', 'a2') to either a
+        list of native PX_ell terms (e.g. ['Pctr_c0']) or a single 'Pctr_a*'
+        string. We take the *union* of the native terms and run a single
+        `PX_ell` call (one spline build and one LOS average instead of one per
+        label), plus a single `PX_ell_extra_batch` call for the 'Pctr_a*'
+        terms, then slice per label.
+
+        Returns ``{label: [pred_per_obs_array]}`` matching the single-label
+        method's per-observable shape.
+        """
+        if not am_diagrams:
+            return {}
+        if not observables:
+            return {d: [] for d in am_diagrams}
+
         cache_key = tuple(id(obs) for obs in observables)
         if not hasattr(self, '_pk_X_cache'):
             self._pk_X_cache = {}
@@ -197,53 +219,69 @@ class COMET(comet, BaseModel):
             self._pk_X_cache[cache_key] = (ell_all, k_all, segment_indices)
             
         ell_all, k_all, segment_indices = self._pk_X_cache[cache_key]
+        use_interp = self.use_interp_kwin and all(obs.kwin is not None for obs in observables)
 
-        px_ell_func = self.PX_ell
-        if 'a0' in diagram or 'a2' in diagram or 'a4' in diagram:
-            px_ell_func = self.PX_ell_extra
+        def evaluate(px_ell_func, X_list):
+            # Evaluate model only at unique k values (or on the compressed k grid).
+            if use_interp:
+                k_eval = self.get_kvec_compression(min(k_all), max(k_all))
+                pX_eval = px_ell_func(k_eval, params, ell_all, X_list, de_model=de_model)
+                pX_list = np.stack([pX_eval[f'ell{ll}'] for ll in ell_all], axis=1)
+                check_finite(pX_list, f'PX_ell[{X_list}]', self.params)
+                spline = make_interp_spline(k_eval, pX_list, axis=0)(k_all)
+                return {f'ell{ll}': spline[:, i, ...] for i, ll in enumerate(ell_all)}
+            return px_ell_func(k_all, params, ell_all, X_list, de_model=de_model)
 
-        if self.use_interp_kwin and all(obs.kwin is not None for obs in observables):
-            k_eval = self.get_kvec_compression(min(k_all), max(k_all))
-            pX_eval = px_ell_func(k_eval, params, ell_all, diagram, de_model=de_model)
-            pX_list = np.stack([pX_eval[f'ell{ll}'] for ll in ell_all], axis=1)
-            check_finite(pX_list, f'PX_ell[{diagram}]', self.params)
-            spline = make_interp_spline(k_eval, pX_list, axis=0)(k_all)
-            pX_batched = {f'ell{ll}': spline[:, i, ...] for i, ll in enumerate(ell_all)}
-            
+        # Native PX_ell terms come as lists, the extra 'Pctr_a*' terms as strings.
+        native_labels = {d: X for d, X in am_diagrams.items() if not isinstance(X, str)}
+        extra_labels = {d: X for d, X in am_diagrams.items() if isinstance(X, str)}
 
-        
-        # Evaluate model only at unique k values
-        else:
-            pX_batched = px_ell_func(k_all, params, ell_all, diagram, de_model=de_model)
-         
-        # # Determine which X prediction method to use
-        # if 'a0' in diagram or 'a2' in diagram or 'a4' in diagram:
-        #     pX_batched = self.PX_ell_extra(k_all, params, ell_all, diagram, de_model=de_model)
-        # else:
-        #     pX_batched = self.PX_ell(k_all, params, ell_all, diagram, de_model=de_model)
-        
-        # Extract predictions for each observable
-        preds = []
+        # Per AM label: {f'ell{ll}': (nk, [nx]) single-z, (nk, [nx], nz) batched}.
+        px_per_diag = {}
+        if native_labels:
+            # Build deduplicated union of native terms across all requested AM labels.
+            native_idx = {}
+            for X in native_labels.values():
+                for n in X:
+                    if n not in native_idx:
+                        native_idx[n] = len(native_idx)
+            native_names = list(native_idx.keys())
+            px_native = evaluate(self.PX_ell, native_names)
+            # PX_ell squeezes the term axis when there is a single term; restore it.
+            if len(native_names) == 1:
+                px_native = {key: v[:, None, ...] for key, v in px_native.items()}
+            for d, X in native_labels.items():
+                col_idx = [native_idx[n] for n in X]
+                col_idx = col_idx[0] if len(col_idx) == 1 else col_idx
+                px_per_diag[d] = {key: v[:, col_idx, ...] for key, v in px_native.items()}
+        if extra_labels:
+            extra_names = list(dict.fromkeys(extra_labels.values()))
+            px_extra = evaluate(self.PX_ell_extra_batch, extra_names)
+            for d, X in extra_labels.items():
+                col = extra_names.index(X)
+                px_per_diag[d] = {key: v[:, col, ...] for key, v in px_extra.items()}
+
+        # Assemble per-observable predictions for each AM label.
         is_batched = isinstance(params.get('z'), (list, np.ndarray)) and len(params['z']) > 1
-        segment_idx = 0
-        
-        for obs in observables:
-            iz = getattr(obs, '_batch_iz', None) if is_batched else None
-            ell = obs.ell if obs.ellwin is None else obs.ellwin
-            pX_z = []
-            
-            for ll in ell:
-                idx = segment_indices[segment_idx]
-                pX_slice = pX_batched[f'ell{ll}'][idx, ..., iz] if is_batched else pX_batched[f'ell{ll}'][idx]
-                pX_z.append(pX_slice)
-                segment_idx += 1
-            
-            pX_z = np.concatenate(pX_z, axis=0)
-            if obs.xwin is not None:
-                pX_z = np.einsum('ij,jk->ik', obs.wmat, pX_z) if pX_z.ndim == 2 else obs.wmat @ pX_z
-            preds.append(pX_z)
-            
-        return preds
+        result = {d: [] for d in am_diagrams}
+        for d in am_diagrams:
+            pX_batched = px_per_diag[d]
+            segment_idx = 0
+            for obs in observables:
+                iz = getattr(obs, '_batch_iz', None) if is_batched else None
+                ell = obs.ell if obs.ellwin is None else obs.ellwin
+                pX_z = []
+                for ll in ell:
+                    idx = segment_indices[segment_idx]
+                    pX_slice = pX_batched[f'ell{ll}'][idx, ..., iz] if is_batched else pX_batched[f'ell{ll}'][idx]
+                    pX_z.append(pX_slice)
+                    segment_idx += 1
+                pX_z = np.concatenate(pX_z, axis=0)
+                if obs.xwin is not None:
+                    pX_z = np.einsum('ij,jk->ik', obs.wmat, pX_z) if pX_z.ndim == 2 else obs.wmat @ pX_z
+                result[d].append(pX_z)
+
+        return result
     
     def predict_bispectrum_scoccimarro_multipoles(self, observables, params, de_model):
         cache_key = tuple(id(obs) for obs in observables)
@@ -478,6 +516,16 @@ class COMET(comet, BaseModel):
         return result
 
     def PX_ell_extra(self, k, params, ell, diagram, de_model):
+        """Back-compat single-diagram shim around `PX_ell_extra_batch`."""
+        res = self.PX_ell_extra_batch(k, params, ell, [diagram], de_model)
+        return {key: v[:, 0, ...] for key, v in res.items()}
+
+    def PX_ell_extra_batch(self, k, params, ell, diagrams, de_model):
+        """'Pctr_a*' contributions for several diagrams, sharing one PX_2d evaluation.
+
+        Returns ``{f'ell{ll}': array}`` with the diagrams stacked on axis 1:
+        shape (nk, ndiag) single-z, (nk, ndiag, nz) batched.
+        """
         if not isinstance(k, list):
             k_all = k
             k = len(ell) * [k]
@@ -503,22 +551,24 @@ class COMET(comet, BaseModel):
         kaiser_fact = (self.params['b1'] + self.params['f'] * mup**2)
         # The large-scale damping only belongs to the VDG model (EFT has no avir/sv).
         wdamping = self._W_kurt(kp, mup) if 'VDG_infty' in self.model else 1.0
-        res = {}
-        # integrand = kaiser_fact * prefact_dict[diagram] * p2d * wdamping
-        integrand = kaiser_fact * prefact_dict[diagram]
-        if diagram == 'Pctr_a4':
-            # Remove octopole contribution from the integrand, since it is not mappable to the c0, c2, c4 basis.
-            integrand = integrand - 16/231 * self.params['f']**2 * eval_legendre(6, mup)
-        integrand = integrand * p2d * wdamping
         legendre = eval_legendre.outer(ell, mu) # shape (n_ell, nmu)
-        r_ = 0.5 * np.einsum("ebc,db,b->dec", integrand, legendre,
-                                self.gl_weights) 
         is_batched = isinstance(params.get('z'), (list, np.ndarray)) and len(params['z']) > 1
-        for i, ll in enumerate(ell):
-            res[f'ell{ll}'] = (2 * ll + 1)/q3 * (r_[i] if is_batched else r_[i, :, 0])
-            if idx_inverse is not None:
-                res[f'ell{ll}'] = res[f'ell{ll}'][idx_inverse][idx_ell[i]:idx_ell[i]+len(k[i])]
-        return res
+        res = {f'ell{ll}': [] for ll in ell}
+        for diagram in diagrams:
+            # integrand = kaiser_fact * prefact_dict[diagram] * p2d * wdamping
+            integrand = kaiser_fact * prefact_dict[diagram]
+            if diagram == 'Pctr_a4':
+                # Remove octopole contribution from the integrand, since it is not mappable to the c0, c2, c4 basis.
+                integrand = integrand - 16/231 * self.params['f']**2 * eval_legendre(6, mup)
+            integrand = integrand * p2d * wdamping
+            r_ = 0.5 * np.einsum("ebc,db,b->dec", integrand, legendre,
+                                    self.gl_weights) 
+            for i, ll in enumerate(ell):
+                r_ell = (2 * ll + 1)/q3 * (r_[i] if is_batched else r_[i, :, 0])
+                if idx_inverse is not None:
+                    r_ell = r_ell[idx_inverse][idx_ell[i]:idx_ell[i]+len(k[i])]
+                res[f'ell{ll}'].append(r_ell)
+        return {key: np.stack(v, axis=1) for key, v in res.items()}
 
     def Bell_scoccimarro(self, tri, params, ell, de_model):
         ell_tuple = tuple(tuple(ll) for ll in ell)
